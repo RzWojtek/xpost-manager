@@ -1,0 +1,16 @@
+{
+  "name": "xpost-manager",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "firebase": "^10.7.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
