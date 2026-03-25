@@ -1,8 +1,8 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#8f8f96;--bg2:#7e7e86;--bg3:#6e6e77;--bg4:#5e5e68;
-  --text:#1a1a22;--text2:#2e2e3a;--text3:#4a4a58;
-  --border:rgba(0,0,0,.12);--border2:rgba(0,0,0,.20);--border3:rgba(0,0,0,.32);
+  --bg:#484862;--bg2:#54546f;--bg3:#60607e;--bg4:#6c6c8d;
+  --text:#f5f5ff;--text2:#c0c0d8;--text3:#8888a8;
+  --border:rgba(255,255,255,.10);--border2:rgba(255,255,255,.17);--border3:rgba(255,255,255,.26);
   --neon:#00e5ff;--neon2:#7c3aed;--neon3:#10b981;--neon4:#f59e0b;--neon5:#ef4444;
   --glow:0 0 14px rgba(0,229,255,.32);
   --r:8px;--rl:12px;--rxl:16px;
