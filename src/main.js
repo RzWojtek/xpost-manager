@@ -506,12 +506,23 @@ function toggleMyForm(show) {
   f.style.display = show ? 'block' : 'none'
   b.textContent   = show ? '✕ Zamknij' : '+ Dodaj wpis'
   if(show) {
-    const d = new Date()
-    const inp = document.getElementById('np-created')
-    if(inp) inp.value = d.toISOString().slice(0,16)
-    // Odśwież select linków ref
+    // Wyczyść wszystkie pola formularza
+    const txt = document.getElementById('np-text')
+    const tags = document.getElementById('np-tags')
+    const note = document.getElementById('np-note')
+    const planned = document.getElementById('np-planned')
+    const cnt = document.getElementById('np-count')
+    if(txt) txt.value = ''
+    if(tags) tags.value = ''
+    if(note) note.value = ''
+    if(planned) planned.value = ''
+    if(cnt) cnt.textContent = '0/280'
+    // Ustaw aktualną datę w polu "Data utworzenia"
+    const created = document.getElementById('np-created')
+    if(created) created.value = new Date().toISOString().slice(0,16)
+    // Odśwież select linków ref i zresetuj na brak
     const sel = document.getElementById('np-reflink')
-    if(sel){const v=sel.value;sel.innerHTML=refSelectHtml();sel.value=v}
+    if(sel){sel.innerHTML=refSelectHtml();sel.value=''}
   }
 }
 
