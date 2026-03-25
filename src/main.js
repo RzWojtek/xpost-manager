@@ -338,7 +338,24 @@ function toggleExpand(id) {
   const b = document.getElementById('bexp-'+id)
   if (!o) return
   const ex = o.classList.contains('expanded')
-  o.classList.toggle('expanded'); if(p) p.classList.toggle('expanded')
+  if (!ex) {
+    // Rozwijamy: oblicz naturalną wysokość obu i ustaw obu tę samą (maksimum)
+    o.classList.add('expanded')
+    if (p) p.classList.add('expanded')
+    // Synchronizuj wysokość - ustaw min-height na wyższy z dwóch
+    requestAnimationFrame(() => {
+      const hO = o.scrollHeight
+      const hP = p ? p.scrollHeight : 0
+      const maxH = Math.max(hO, hP)
+      o.style.maxHeight = maxH + 'px'
+      if (p) p.style.minHeight = maxH + 'px'
+    })
+  } else {
+    // Zwijamy: usuń styl i klasę
+    o.classList.remove('expanded')
+    o.style.maxHeight = ''
+    if (p) { p.classList.remove('expanded'); p.style.minHeight = '' }
+  }
   if (b) b.textContent = ex ? 'Rozwiń' : 'Zwiń'
 }
 

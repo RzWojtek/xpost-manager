@@ -63,6 +63,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .post-date{font-size:11px;color:var(--text3)}
 .status-sel{font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);cursor:pointer;margin-left:auto;font-family:inherit}
 .status-sel:focus{outline:none;border-color:var(--neon)}
+.status-sel option{background:#2a2a3a;color:#f0f0f8}
 
 .card-links{padding:5px 14px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--border)}
 .lchip{font-size:11px;color:var(--neon);background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.2);padding:2px 8px;border-radius:4px;text-decoration:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
@@ -110,6 +111,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .form-row.full{grid-template-columns:1fr}
 .form-label{font-size:11px;color:var(--text2);margin-bottom:4px;font-weight:600;letter-spacing:.03em}
 .form-input,.form-textarea,.form-select{width:100%;font-size:13px;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-family:inherit}
+.form-select option{background:#2a2a3a;color:#f0f0f8}
 .form-input:focus,.form-textarea:focus,.form-select:focus{outline:none;border-color:var(--neon)}
 .form-input::placeholder,.form-textarea::placeholder{color:var(--text3)}
 .form-textarea{resize:vertical;min-height:90px;line-height:1.65;white-space:pre-wrap}
