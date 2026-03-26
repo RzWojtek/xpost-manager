@@ -123,8 +123,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .mypost-card{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);overflow:hidden;margin-bottom:10px}
 .mypost-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--border)}
 .mypost-body{padding:10px 14px}
-.mypost-text{font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word;line-height:1.65;max-height:80px;overflow:hidden}
-.mypost-text.expanded{max-height:none}
+.mypost-text{font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word;line-height:1.65;max-height:62px;overflow:hidden;mask-image:linear-gradient(to bottom,black 50%,transparent 100%)}
+.mypost-text.expanded{max-height:none;mask-image:none}
 .mypost-edit-area{font-size:13px;width:100%;border:1px solid var(--border2);border-radius:var(--r);padding:8px;background:var(--bg3);color:var(--text);resize:vertical;min-height:100px;line-height:1.65;white-space:pre-wrap;font-family:inherit;margin-bottom:10px}
 .mypost-edit-area:focus{outline:none;border-color:var(--neon)}
 .mypost-edit-area::placeholder{color:var(--text3)}
