@@ -557,7 +557,7 @@ function renderArchive() {
         <button class="btn ml-auto" id="aexp-${p.id}" onclick="toggleArchExpand('${p.id}')">Rozwiń</button>
       </div>
       <div class="arch-body" id="arch-body-${p.id}" style="display:none">
-        <div class="arch-text">${p.text}</div>
+        <div class="arch-text" id="arch-text-${p.id}">${p.text}</div>
         ${p.para?`<div style="font-size:11px;color:var(--text3);margin-bottom:4px;margin-top:8px">Parafraza:</div><div class="arch-para">${p.para}</div>`:''}
       </div>
       <div class="arch-foot">
@@ -572,10 +572,13 @@ function renderArchive() {
 
 function toggleArchExpand(id) {
   const body = document.getElementById('arch-body-'+id)
+  const text = document.getElementById('arch-text-'+id)
   const btn  = document.getElementById('aexp-'+id)
   if (!body) return
   const visible = body.style.display !== 'none'
   body.style.display = visible ? 'none' : 'block'
+  // Rozwiń też podgląd tekstu (usuń mask-image)
+  if (text) text.classList.toggle('expanded', !visible)
   if (btn) btn.textContent = visible ? 'Rozwiń' : 'Zwiń'
 }
 
