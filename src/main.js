@@ -206,7 +206,7 @@ function switchTab(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
   document.querySelector(`.tab[data-tab="${name}"]`).classList.add('active')
   document.getElementById(`page-${name}`).classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, archiwum:renderArchive, notatki:renderNotes, ref:renderRef}
+  const fn = {main:renderMain, moje:renderMoje, archiwum:renderArchive, notatki:renderNotes, ref:renderRef, kalendarz:renderKalendarz}
   if (fn[name]) fn[name]()
 }
 
@@ -214,26 +214,15 @@ function switchTab(name) {
 function refLinksHtml(postId) {
   const list = Object.values(refLinks)
   if (!list.length) return ''
-  const chips = list.map(r =>
-    `<span class="ref-chip">
-      <span class="ref-chip-name">${r.name}</span>
-      <button class="ref-chip-copy" onclick="copyText('${r.url.replace(/'/g,"\\'")}')">Kopiuj</button>
-    </span>`
-  ).join('')
-  // Select z listą + kopiuj do parafrazy
-  const opts = Object.values(refLinks).map(r =>
+  const opts = list.map(r =>
     `<option value="${r.url}">${r.name}</option>`
   ).join('')
-  return `<div class="ref-links-row">
-    <span style="font-size:11px;color:var(--text3)">Linki ref:</span>
-    ${chips}
-  </div>
-  <div style="padding:4px 14px 6px;display:flex;gap:6px;align-items:center;border-bottom:1px solid var(--border)">
-    <span style="font-size:11px;color:var(--text3);white-space:nowrap">Wstaw do parafrazy:</span>
-    <select id="ref-sel-${postId}" style="font-size:12px;padding:4px 7px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);flex:1">
-      <option value="">— wybierz link —</option>${opts}
+  return `<div style="padding:5px 14px 6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
+    <span style="font-size:11px;color:var(--text3);white-space:nowrap">Link ref:</span>
+    <select id="ref-sel-${postId}" style="font-size:12px;padding:4px 7px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);flex:1;min-width:120px;max-width:100%">
+      <option value="">— wybierz —</option>${opts}
     </select>
-    <button class="btn btn-info" style="font-size:11px;padding:3px 9px;white-space:nowrap"
+    <button class="btn btn-info" style="font-size:11px;padding:4px 10px;white-space:nowrap"
       onclick="copyRefToParaphrase('${postId}')">Kopiuj</button>
   </div>`
 }
@@ -744,6 +733,7 @@ function buildApp() {
       <button class="tab"        data-tab="archiwum"onclick="switchTab('archiwum')">Archiwum <span class="tab-badge" id="tab-arch-badge">0</span></button>
       <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
       <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
+    <button class="tab"        data-tab="kalendarz" onclick="switchTab('kalendarz')">Kalendarz</button>
     </div>
 
     <!-- WPISY -->
@@ -853,6 +843,11 @@ function buildApp() {
       <div id="ref-cards"></div>
     </div>
 
+  
+    <!-- KALENDARZ -->
+    <div id="page-kalendarz" class="page">
+    </div>
+
   </div><!-- /main-app -->
 
   <!-- EMOJI FAB -->
@@ -868,6 +863,200 @@ function buildApp() {
     <button class="emoji-toggle" onclick="toggleEmojiPanel()" title="Panel emotikonów">😊</button>
   </div>
   `
+}
+
+// ── KALENDARZ ────────────────────────────────────────────────────
+function renderKalendarz() {
+  const el = document.getElementById('page-kalendarz')
+  if (!el) return
+
+  // Zbierz wszystkie opublikowane wpisy z posts i myPosts
+  const published = []
+
+  Object.values(posts).forEach(p => {
+    if (p.status === 'Opublikowane') {
+      const dateStr = (p.archivedAt || p.xDate || '').slice(0, 10)
+      if (dateStr) published.push({ date: dateStr, source: 'wpisy', text: p.text, account: '@' + p.account, xLink: p.xLink || '', para: p.para || '' })
+    }
+  })
+
+  Object.values(myPosts).forEach(p => {
+    if (p.status === 'Opublikowane') {
+      const dateStr = (p.published || p.created || '').slice(0, 10)
+      if (dateStr) published.push({ date: dateStr, source: 'moje', text: p.text, account: 'Mój wpis', xLink: '', para: '', tags: p.tags || '' })
+    }
+  })
+
+  // Grupuj po dacie
+  const byDate = {}
+  published.forEach(p => {
+    if (!byDate[p.date]) byDate[p.date] = []
+    byDate[p.date].push(p)
+  })
+
+  const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a))
+  const total = published.length
+  const totalDays = dates.length
+  const avgPerDay = totalDays ? (total / totalDays).toFixed(1) : 0
+
+  // Streak - ile dni z rzędu (od dzisiaj wstecz)
+  let streak = 0
+  const today = new Date()
+  for (let i = 0; i < 60; i++) {
+    const d = new Date(today); d.setDate(d.getDate() - i)
+    const ds = d.toISOString().slice(0, 10)
+    if (byDate[ds]) streak++
+    else if (i > 0) break
+  }
+
+  // Najaktywniejszy dzień
+  let maxDay = '', maxCount = 0
+  dates.forEach(d => { if (byDate[d].length > maxCount) { maxCount = byDate[d].length; maxDay = d } })
+
+  // Aktywność ostatnie 4 tygodnie (heatmapa)
+  const heatmap = []
+  for (let i = 27; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i)
+    const ds = d.toISOString().slice(0, 10)
+    heatmap.push({ date: ds, count: byDate[ds] ? byDate[ds].length : 0 })
+  }
+  const maxHeat = Math.max(...heatmap.map(h => h.count), 1)
+
+  function heatColor(count) {
+    if (count === 0) return 'background:var(--bg3)'
+    const intensity = Math.min(count / maxHeat, 1)
+    if (intensity < 0.33) return 'background:rgba(0,229,255,0.25)'
+    if (intensity < 0.66) return 'background:rgba(0,229,255,0.55)'
+    return 'background:rgba(0,229,255,0.9)'
+  }
+
+  // Statystyki per konto
+  const byAccount = {}
+  published.forEach(p => {
+    byAccount[p.account] = (byAccount[p.account] || 0) + 1
+  })
+  const topAccounts = Object.entries(byAccount).sort((a, b) => b[1] - a[1]).slice(0, 5)
+
+  // Aktywność per miesiąc
+  const byMonth = {}
+  published.forEach(p => {
+    const m = p.date.slice(0, 7)
+    byMonth[m] = (byMonth[m] || 0) + 1
+  })
+  const months = Object.entries(byMonth).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 6)
+  const maxMonth = Math.max(...months.map(m => m[1]), 1)
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:20px">
+      <div class="stat"><div class="stat-n" style="color:var(--neon)">${total}</div><div class="stat-l">Opublikowanych</div></div>
+      <div class="stat"><div class="stat-n" style="color:var(--neon3)">${totalDays}</div><div class="stat-l">Aktywnych dni</div></div>
+      <div class="stat"><div class="stat-n" style="color:var(--neon4)">${avgPerDay}</div><div class="stat-l">Śr. dziennie</div></div>
+      <div class="stat"><div class="stat-n" style="color:var(--neon2)">${streak}</div><div class="stat-l">Dni z rzędu</div></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
+
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);padding:14px">
+        <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">Aktywność — ostatnie 4 tygodnie</div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">
+          ${['Pn','Wt','Śr','Cz','Pt','Sb','Nd'].map(d=>`<div style="font-size:9px;color:var(--text3);text-align:center">${d}</div>`).join('')}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">
+          ${heatmap.map(h=>`<div title="${h.date}: ${h.count} wpisów" style="aspect-ratio:1;border-radius:3px;${heatColor(h.count)};cursor:${h.count?'pointer':'default'}" onclick="${h.count?`showDayPosts('${h.date}')`:''}" ></div>`).join('')}
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+          <span style="font-size:10px;color:var(--text3)">Mniej</span>
+          ${[0,0.25,0.55,0.9].map(o=>`<div style="width:12px;height:12px;border-radius:2px;background:rgba(0,229,255,${o||0.08})"></div>`).join('')}
+          <span style="font-size:10px;color:var(--text3)">Więcej</span>
+        </div>
+      </div>
+
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);padding:14px">
+        <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">Aktywność miesięczna</div>
+        ${months.length ? months.map(([m, cnt]) => `
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+            <span style="font-size:12px;color:var(--text2);min-width:65px">${m}</span>
+            <div style="flex:1;height:14px;background:var(--bg3);border-radius:3px;overflow:hidden">
+              <div style="height:100%;width:${Math.round(cnt/maxMonth*100)}%;background:var(--neon);border-radius:3px;transition:width .3s"></div>
+            </div>
+            <span style="font-size:12px;color:var(--neon);min-width:20px;text-align:right">${cnt}</span>
+          </div>`).join('') : '<div style="color:var(--text3);font-size:13px">Brak danych</div>'}
+      </div>
+
+    </div>
+
+    ${topAccounts.length ? `
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);padding:14px;margin-bottom:20px">
+      <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">Top źródła wpisów</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">
+        ${topAccounts.map(([acc, cnt]) => `
+          <div style="background:var(--bg3);border-radius:var(--r);padding:10px;text-align:center">
+            <div style="font-size:13px;font-weight:700;color:var(--neon)">${cnt}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${acc}</div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <div style="font-size:13px;font-weight:700;color:var(--text2);margin-bottom:10px">
+      Historia publikacji — kliknij dzień aby zobaczyć wpisy
+    </div>
+
+    ${dates.length ? dates.map(date => `
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);overflow:hidden;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)"
+          onclick="toggleDayPosts('${date}')">
+          <span style="font-size:13px;font-weight:700;color:var(--neon)">${date}</span>
+          <span style="font-size:11px;color:var(--text3)">${new Date(date + 'T12:00:00').toLocaleDateString('pl-PL',{weekday:'long'})}</span>
+          <span style="background:rgba(0,229,255,.12);color:var(--neon);font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;margin-left:auto">${byDate[date].length} ${byDate[date].length===1?'wpis':byDate[date].length<5?'wpisy':'wpisów'}</span>
+          <button class="btn" id="kbtn-${date}" style="font-size:11px;padding:3px 8px">Rozwiń</button>
+        </div>
+        <div id="kday-${date}" style="display:none">
+          ${byDate[date].map((p, i) => `
+            <div style="padding:10px 14px;border-bottom:${i<byDate[date].length-1?'1px solid var(--border)':'none'}">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+                <span style="font-size:12px;font-weight:700;color:${p.source==='moje'?'var(--neon2)':'var(--neon)'}">${p.account}</span>
+                <span style="font-size:10px;padding:2px 6px;border-radius:3px;background:${p.source==='moje'?'rgba(124,58,237,.15)':'rgba(0,229,255,.1)'};color:${p.source==='moje'?'#a78bfa':'var(--neon)'}">${p.source==='moje'?'Mój wpis':'Z Wpisów'}</span>
+                ${p.xLink?`<a class="xlink" href="${p.xLink}" target="_blank" style="font-size:10px">X ↗</a>`:''}
+                ${p.tags?`<span style="font-size:11px;color:var(--neon)">${p.tags}</span>`:''}
+              </div>
+              <div id="kpost-${date}-${i}" style="font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word;line-height:1.65;max-height:62px;overflow:hidden;mask-image:linear-gradient(to bottom,black 40%,transparent 100%)">${p.text}</div>
+              ${p.para?`<div style="font-size:11px;color:var(--text3);margin-top:6px;margin-bottom:3px">Parafraza:</div>
+              <div id="kpara-${date}-${i}" style="font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word;line-height:1.65;max-height:62px;overflow:hidden;mask-image:linear-gradient(to bottom,black 40%,transparent 100%);background:var(--bg3);padding:6px 8px;border-radius:var(--r)">${p.para}</div>`:''}
+              <div style="margin-top:6px">
+                <button class="btn" id="kpbtn-${date}-${i}" style="font-size:11px;padding:3px 8px" onclick="toggleKPost('${date}',${i})">Rozwiń</button>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`).join('')
+    : '<div class="empty">Brak opublikowanych wpisów.</div>'}
+  `
+}
+
+function toggleDayPosts(date) {
+  const el  = document.getElementById('kday-' + date)
+  const btn = document.getElementById('kbtn-' + date)
+  if (!el) return
+  const open = el.style.display !== 'none'
+  el.style.display = open ? 'none' : 'block'
+  if (btn) btn.textContent = open ? 'Rozwiń' : 'Zwiń'
+}
+
+function showDayPosts(date) {
+  // Kliknięcie w heatmapę — otwórz dzień jeśli istnieje na liście
+  const el = document.getElementById('kday-' + date)
+  if (el) { el.style.display = 'block'; const btn = document.getElementById('kbtn-' + date); if (btn) btn.textContent = 'Zwiń'; el.scrollIntoView({ behavior: 'smooth', block: 'center' }) }
+}
+
+function toggleKPost(date, idx) {
+  const post = document.getElementById(`kpost-${date}-${idx}`)
+  const para = document.getElementById(`kpara-${date}-${idx}`)
+  const btn  = document.getElementById(`kpbtn-${date}-${idx}`)
+  if (!post) return
+  const expanded = post.style.maxHeight === 'none'
+  post.style.maxHeight = expanded ? '62px' : 'none'
+  post.style.maskImage = expanded ? 'linear-gradient(to bottom,black 40%,transparent 100%)' : 'none'
+  if (para) { para.style.maxHeight = expanded ? '62px' : 'none'; para.style.maskImage = expanded ? 'linear-gradient(to bottom,black 40%,transparent 100%)' : 'none' }
+  if (btn) btn.textContent = expanded ? 'Rozwiń' : 'Zwiń'
 }
 
 // ── REF COPY HELPERS ─────────────────────────────────────────────
@@ -894,6 +1083,7 @@ Object.assign(window, {
   renderRef, toggleRefForm, addRef, startRefEdit, cancelRefEdit, saveRefEdit, deleteRef,
   toggleEmojiPanel, addEmoji, emojiClick, removeEmoji,
   copyRefToParaphrase, copyRefFromSelect,
+  renderKalendarz, toggleDayPosts, showDayPosts, toggleKPost,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
