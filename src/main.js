@@ -211,7 +211,7 @@ function switchTab(name) {
 }
 
 // ── REF CHIPS ─────────────────────────────────────────────────────
-function refLinksHtml() {
+function refLinksHtml(postId) {
   const list = Object.values(refLinks)
   if (!list.length) return ''
   const chips = list.map(r =>
@@ -220,8 +220,21 @@ function refLinksHtml() {
       <button class="ref-chip-copy" onclick="copyText('${r.url.replace(/'/g,"\\'")}')">Kopiuj</button>
     </span>`
   ).join('')
+  // Select z listą + kopiuj do parafrazy
+  const opts = Object.values(refLinks).map(r =>
+    `<option value="${r.url}">${r.name}</option>`
+  ).join('')
   return `<div class="ref-links-row">
-    <span style="font-size:11px;color:var(--text3)">Linki ref:</span>${chips}
+    <span style="font-size:11px;color:var(--text3)">Linki ref:</span>
+    ${chips}
+  </div>
+  <div style="padding:4px 14px 6px;display:flex;gap:6px;align-items:center;border-bottom:1px solid var(--border)">
+    <span style="font-size:11px;color:var(--text3);white-space:nowrap">Wstaw do parafrazy:</span>
+    <select id="ref-sel-${postId}" style="font-size:12px;padding:4px 7px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);flex:1">
+      <option value="">— wybierz link —</option>${opts}
+    </select>
+    <button class="btn btn-info" style="font-size:11px;padding:3px 9px;white-space:nowrap"
+      onclick="copyRefToParaphrase('${postId}')">Kopiuj</button>
   </div>`
 }
 
@@ -292,7 +305,7 @@ function renderMain() {
         </select>
       </div>
       ${linksH}${imgsH}
-      ${refLinksHtml()}
+      ${refLinksHtml(p.id)}
       <div class="card-body">
         <div class="col-orig">
           <div class="col-label">Oryginał</div>
@@ -540,11 +553,12 @@ function renderArchive() {
         <span class="account">@${p.account}</span>
         <a class="xlink" href="${p.xLink||'#'}" target="_blank">Otwórz na X ↗</a>
         <span class="post-date">📅 ${p.xDate}</span>
-        <span style="font-size:11px;color:var(--text3);margin-left:auto">arch. ${p.archivedAt||''}</span>
+        <span style="font-size:11px;color:var(--text3)">arch. ${p.archivedAt||''}</span>
+        <button class="btn ml-auto" id="aexp-${p.id}" onclick="toggleArchExpand('${p.id}')">Rozwiń</button>
       </div>
-      <div class="arch-body">
+      <div class="arch-body" id="arch-body-${p.id}" style="display:none">
         <div class="arch-text">${p.text}</div>
-        ${p.para?`<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Parafraza:</div><div class="arch-para">${p.para}</div>`:''}
+        ${p.para?`<div style="font-size:11px;color:var(--text3);margin-bottom:4px;margin-top:8px">Parafraza:</div><div class="arch-para">${p.para}</div>`:''}
       </div>
       <div class="arch-foot">
         <span style="font-size:12px;color:var(--text2)">Przywróć jako:</span>
@@ -554,6 +568,15 @@ function renderArchive() {
         <button class="btn btn-info" onclick="restorePost('${p.id}')">Przywróć</button>
       </div>
     </div>`).join('')
+}
+
+function toggleArchExpand(id) {
+  const body = document.getElementById('arch-body-'+id)
+  const btn  = document.getElementById('aexp-'+id)
+  if (!body) return
+  const visible = body.style.display !== 'none'
+  body.style.display = visible ? 'none' : 'block'
+  if (btn) btn.textContent = visible ? 'Rozwiń' : 'Zwiń'
 }
 
 async function restorePost(id) {
@@ -770,8 +793,13 @@ function buildApp() {
               <input class="form-input" id="np-note" placeholder="np. źródło, pomysł..."></div>
           </div>
           <div class="form-row full">
-            <div><div class="form-label">Link referencyjny</div>
-              <select class="form-select" id="np-reflink">${refSelectHtml()}</select></div>
+            <div>
+              <div class="form-label">Link referencyjny</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <select class="form-select" id="np-reflink" style="flex:1">${refSelectHtml()}</select>
+                <button class="btn btn-info" style="white-space:nowrap" onclick="copyRefFromSelect('np-reflink')">Kopiuj link</button>
+              </div>
+            </div>
           </div>
           <div class="form-btns">
             <button class="btn btn-primary" onclick="addMyPost()">Dodaj wpis</button>
@@ -839,16 +867,30 @@ function buildApp() {
   `
 }
 
+// ── REF COPY HELPERS ─────────────────────────────────────────────
+function copyRefToParaphrase(postId) {
+  const sel = document.getElementById('ref-sel-'+postId)
+  if (!sel || !sel.value) { toast('Wybierz link z listy!'); return }
+  copyText(sel.value)
+}
+
+function copyRefFromSelect(selectId) {
+  const sel = document.getElementById(selectId)
+  if (!sel || !sel.value) { toast('Wybierz link z listy!'); return }
+  copyText(sel.value)
+}
+
 // ── EXPOSE ────────────────────────────────────────────────────────
 Object.assign(window, {
   loginGoogle, logout, switchTab, syncSheets,
   renderMain, setPostStatus, savePara, toggleExpand, copyText,
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
   addMyPost, toggleMyForm, publishMyPost, deleteMyPost,
-  renderArchive, restorePost,
+  renderArchive, restorePost, toggleArchExpand,
   addNote, deleteNote,
   renderRef, toggleRefForm, addRef, startRefEdit, cancelRefEdit, saveRefEdit, deleteRef,
   toggleEmojiPanel, addEmoji, emojiClick, removeEmoji,
+  copyRefToParaphrase, copyRefFromSelect,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
