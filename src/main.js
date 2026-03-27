@@ -10,7 +10,7 @@ const SHEET_ID  = import.meta.env.VITE_SHEET_ID
 const SHEET_TAB = import.meta.env.VITE_SHEET_TAB || 'Arkusz1'
 const API_KEY   = import.meta.env.VITE_SHEETS_API_KEY
 // Kolumny Sheets (0-indexed): A=data B=konto C=tekst D=link E=linki F=id G=done H=zdjecia
-const COL = { date:0, account:1, text:2, link:3, links:4, id:5, img:7 }
+const COL = { date:0, account:1, text:2, link:3, links:4, id:5, img:7, type:8 }
 
 // ── STATE ─────────────────────────────────────────────────────────
 let posts    = {}
@@ -23,6 +23,7 @@ let emojis   = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','�
 let fAccount = ''
 let fStatus  = ''
 let fSearch  = ''
+let fType    = ''
 
 // ── UTILS ─────────────────────────────────────────────────────────
 const nowStr = () => new Date().toLocaleString('pl-PL',{hour12:false}).replace(',','')
@@ -183,6 +184,7 @@ async function syncSheets() {
         links:   row[COL.links]  ? row[COL.links].split(/[\n,]+/).map(s=>s.trim()).filter(Boolean) : [],
         // Zdjęcia — może być kilka oddzielonych \n
         imgs:    row[COL.img]    ? row[COL.img].split(/[\n,]+/).map(s=>s.trim()).filter(Boolean) : [],
+        isRT:    (row[COL.type]||'').trim().toUpperCase()==='RT',
         para:    '',
         status:  'Nowy',
         addedAt: nowStr(),
@@ -238,15 +240,19 @@ function renderMain() {
   // Pobierz aktualne wartości filtrów z DOM (FIX: filtry)
   const selAcc = document.getElementById('f-account')
   const selSt  = document.getElementById('f-status')
+  const selTy  = document.getElementById('f-type')
   const inpSr  = document.getElementById('f-search')
   if (selAcc) fAccount = selAcc.value
   if (selSt)  fStatus  = selSt.value
+  if (selTy)  fType    = selTy.value
   if (inpSr)  fSearch  = inpSr.value.toLowerCase()
 
   const list = Object.values(posts).filter(p => {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
     if (fAccount && p.account !== fAccount) return false
     if (fStatus  && p.status  !== fStatus)  return false
+    if (fType === 'rt'   && !p.isRT)  return false
+    if (fType === 'post' &&  p.isRT)  return false
     if (fSearch  && !p.text.toLowerCase().includes(fSearch)) return false
     return true
   }).sort((a,b) => (b.addedAt||b.xDate).localeCompare(a.addedAt||a.xDate))
@@ -287,6 +293,7 @@ function renderMain() {
     return `<div class="card" id="card-${p.id}">
       <div class="card-head">
         <span class="account">@${p.account}</span>
+        ${p.isRT ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
         <a class="xlink" href="${p.xLink||'#'}" target="_blank">Otwórz na X ↗</a>
         <span class="post-date">📅 ${p.xDate}</span>
         <select class="status-sel" style="${statusStyle(p.status)}" onchange="setPostStatus('${p.id}',this.value)">
@@ -540,6 +547,7 @@ function renderArchive() {
     <div class="arch-card">
       <div class="arch-head">
         <span class="account">@${p.account}</span>
+        ${p.isRT ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
         <a class="xlink" href="${p.xLink||'#'}" target="_blank">Otwórz na X ↗</a>
         <span class="post-date">📅 ${p.xDate}</span>
         <span style="font-size:11px;color:var(--text3)">arch. ${p.archivedAt||''}</span>
@@ -749,6 +757,11 @@ function buildApp() {
         <select id="f-status"  onchange="renderMain()">
           <option value="">Wszystkie statusy</option>
           <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
+        </select>
+        <select id="f-type" onchange="renderMain()">
+          <option value="">Posty i RT</option>
+          <option value="post">Tylko posty</option>
+          <option value="rt">Tylko RT</option>
         </select>
         <input id="f-search" placeholder="Szukaj w treści..." oninput="renderMain()" style="flex:1;min-width:140px">
       </div>
