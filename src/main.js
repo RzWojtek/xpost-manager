@@ -251,8 +251,10 @@ function renderMain() {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
     if (fAccount && p.account !== fAccount) return false
     if (fStatus  && p.status  !== fStatus)  return false
-    if (fType === 'rt'   && !p.isRT)  return false
-    if (fType === 'post' &&  p.isRT)  return false
+    // isRT może być ustawione przez bota LUB wykryte z nazwy konta (stare wpisy)
+    const isRT = p.isRT || (p.account && p.account.includes(' RT @'))
+    if (fType === 'rt'   && !isRT)  return false
+    if (fType === 'post' &&  isRT)  return false
     if (fSearch  && !p.text.toLowerCase().includes(fSearch)) return false
     return true
   }).sort((a,b) => (b.addedAt||b.xDate).localeCompare(a.addedAt||a.xDate))
@@ -293,7 +295,7 @@ function renderMain() {
     return `<div class="card" id="card-${p.id}">
       <div class="card-head">
         <span class="account">@${p.account}</span>
-        ${p.isRT ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
+        ${(p.isRT || (p.account&&p.account.includes(' RT @'))) ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
         <a class="xlink" href="${p.xLink||'#'}" target="_blank">Otwórz na X ↗</a>
         <span class="post-date">📅 ${p.xDate}</span>
         <select class="status-sel" style="${statusStyle(p.status)}" onchange="setPostStatus('${p.id}',this.value)">
@@ -372,10 +374,12 @@ function toggleExpand(id) {
 function updateStats() {
   const all  = Object.values(posts)
   const s    = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v }
+  const isRT = p => p.isRT || (p.account && p.account.includes(' RT @'))
   s('s-all',  all.filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane').length)
   s('s-new',  all.filter(p=>p.status==='Nowy').length)
   s('s-todo', all.filter(p=>p.status==='Do zrobienia'||p.status==='W toku').length)
   s('s-done', all.filter(p=>p.status==='Opublikowane').length)
+  s('s-rt',   all.filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane'&&isRT(p)).length)
 }
 
 function updateBadges() {
@@ -547,7 +551,7 @@ function renderArchive() {
     <div class="arch-card">
       <div class="arch-head">
         <span class="account">@${p.account}</span>
-        ${p.isRT ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
+        ${(p.isRT || (p.account&&p.account.includes(' RT @'))) ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
         <a class="xlink" href="${p.xLink||'#'}" target="_blank">Otwórz na X ↗</a>
         <span class="post-date">📅 ${p.xDate}</span>
         <span style="font-size:11px;color:var(--text3)">arch. ${p.archivedAt||''}</span>
@@ -746,11 +750,15 @@ function buildApp() {
 
     <!-- WPISY -->
     <div id="page-main" class="page active">
-      <div class="stats">
+      <div class="stats" style="grid-template-columns:repeat(5,minmax(0,1fr))">
         <div class="stat"><div class="stat-n" id="s-all" style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
         <div class="stat"><div class="stat-n" id="s-new" style="color:var(--neon)">0</div><div class="stat-l">Nowych</div></div>
         <div class="stat"><div class="stat-n" id="s-todo" style="color:var(--neon4)">0</div><div class="stat-l">W toku</div></div>
         <div class="stat"><div class="stat-n" id="s-done" style="color:var(--neon3)">0</div><div class="stat-l">Opublikowanych</div></div>
+        <div class="stat" style="cursor:pointer" onclick="document.getElementById('f-type').value='rt';renderMain()" title="Kliknij aby filtrować RT">
+          <div class="stat-n" id="s-rt" style="color:#a78bfa">0</div>
+          <div class="stat-l">Retweetów</div>
+        </div>
       </div>
       <div class="filters">
         <select id="f-account" onchange="renderMain()"><option value="">Wszystkie konta</option></select>
