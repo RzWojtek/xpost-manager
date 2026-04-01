@@ -257,7 +257,7 @@ function renderMain() {
     if (fType === 'post' &&  isRT)  return false
     if (fSearch  && !p.text.toLowerCase().includes(fSearch)) return false
     return true
-  }).sort((a,b) => (b.addedAt||b.xDate).localeCompare(a.addedAt||a.xDate))
+  }).sort((a,b) => (b.xDate||b.addedAt).localeCompare(a.xDate||a.addedAt))
 
   // Odśwież listę kont w filtrze
   const accounts = [...new Set(Object.values(posts).map(p=>p.account))].sort()
