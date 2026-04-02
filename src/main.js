@@ -1,7 +1,7 @@
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
 import {
-  collection, doc, getDocs, setDoc, updateDoc, deleteDoc, query, orderBy
+  collection, doc, getDocs, setDoc, updateDoc, deleteDoc, query, orderBy, onSnapshot
 } from 'firebase/firestore'
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
 
@@ -13,17 +13,27 @@ const API_KEY   = import.meta.env.VITE_SHEETS_API_KEY
 const COL = { date:0, account:1, text:2, link:3, links:4, id:5, img:7, type:8 }
 
 // ── STATE ─────────────────────────────────────────────────────────
-let posts    = {}
-let myPosts  = {}
-let refLinks = {}
-let notes    = {}
-let emojis   = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
+let posts      = {}
+let myPosts    = {}
+let refLinks   = {}
+let notes      = {}
+let tgSignals  = {}
+let tgWpisy    = {}
+let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
 
 // Filter state — zarządzane lokalnie
 let fAccount = ''
 let fStatus  = ''
 let fSearch  = ''
 let fType    = ''
+
+// TG filter state
+let tgSigChannel = ''
+let tgSigStatus  = ''
+let tgSigSearch  = ''
+let tgWpisChannel= ''
+let tgWpisStatus = ''
+let tgWpisSearch = ''
 
 // ── UTILS ─────────────────────────────────────────────────────────
 const nowStr = () => new Date().toLocaleString('pl-PL',{hour12:false}).replace(',','')
@@ -147,17 +157,21 @@ async function logout() {
 
 // ── FIREBASE LOAD ─────────────────────────────────────────────────
 async function loadAll() {
-  posts = {}; myPosts = {}; refLinks = {}; notes = {}
-  const [ps, ms, rs, ns] = await Promise.all([
-    getDocs(query(collection(db,'posts'),   orderBy('xDate','desc'))),
-    getDocs(query(collection(db,'myPosts'), orderBy('created','desc'))),
+  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}
+  const [ps, ms, rs, ns, tgs, tgw] = await Promise.all([
+    getDocs(query(collection(db,'posts'),      orderBy('xDate','desc'))),
+    getDocs(query(collection(db,'myPosts'),    orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
-    getDocs(query(collection(db,'notes'),   orderBy('created','desc'))),
+    getDocs(query(collection(db,'notes'),      orderBy('created','desc'))),
+    getDocs(query(collection(db,'tgSignals'),  orderBy('addedAt','desc'))),
+    getDocs(query(collection(db,'tgWpisy'),    orderBy('addedAt','desc'))),
   ])
-  ps.forEach(d => { posts[d.id]    = d.data() })
-  ms.forEach(d => { myPosts[d.id]  = d.data() })
-  rs.forEach(d => { refLinks[d.id] = d.data() })
-  ns.forEach(d => { notes[d.id]    = d.data() })
+  ps.forEach(d  => { posts[d.id]     = d.data() })
+  ms.forEach(d  => { myPosts[d.id]   = d.data() })
+  rs.forEach(d  => { refLinks[d.id]  = d.data() })
+  ns.forEach(d  => { notes[d.id]     = d.data() })
+  tgs.forEach(d => { tgSignals[d.id] = d.data() })
+  tgw.forEach(d => { tgWpisy[d.id]   = d.data() })
 }
 
 // ── SHEETS SYNC ───────────────────────────────────────────────────
@@ -208,7 +222,7 @@ function switchTab(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
   document.querySelector(`.tab[data-tab="${name}"]`).classList.add('active')
   document.getElementById(`page-${name}`).classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, archiwum:renderArchive, notatki:renderNotes, ref:renderRef, kalendarz:renderKalendarz}
+  const fn = {main:renderMain, moje:renderMoje, archiwum:renderArchive, notatki:renderNotes, ref:renderRef, kalendarz:renderKalendarz, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy}
   if (fn[name]) fn[name]()
 }
 
@@ -384,11 +398,13 @@ function updateStats() {
 
 function updateBadges() {
   const s = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v }
-  s('tab-main-badge', Object.values(posts).filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane').length)
-  s('tab-moje-badge', Object.keys(myPosts).length)
-  s('tab-arch-badge', Object.values(posts).filter(p=>p.status==='Opublikowane').length)
-  s('tab-notes-badge',Object.keys(notes).length)
-  s('tab-ref-badge',  Object.keys(refLinks).length)
+  s('tab-main-badge',  Object.values(posts).filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane').length)
+  s('tab-moje-badge',  Object.keys(myPosts).length)
+  s('tab-arch-badge',  Object.values(posts).filter(p=>p.status==='Opublikowane').length)
+  s('tab-notes-badge', Object.keys(notes).length)
+  s('tab-ref-badge',   Object.keys(refLinks).length)
+  s('tab-tgsig-badge', Object.values(tgSignals).filter(p=>p.status==='Nowy').length)
+  s('tab-tgwpisy-badge',Object.values(tgWpisy).filter(p=>p.status==='Nowy').length)
 }
 
 // ── RENDER: MY POSTS ──────────────────────────────────────────────
@@ -708,6 +724,196 @@ function refreshRefInOtherTabs() {
   if(sel){const v=sel.value;sel.innerHTML=refSelectHtml();sel.value=v}
 }
 
+// ── RENDER: TG SYGNAŁY ───────────────────────────────────────────
+function renderTgSygnaly() {
+  const selCh = document.getElementById('tgsig-channel')
+  const selSt = document.getElementById('tgsig-status')
+  const inpSr = document.getElementById('tgsig-search')
+  if (selCh) tgSigChannel = selCh.value
+  if (selSt) tgSigStatus  = selSt.value
+  if (inpSr) tgSigSearch  = inpSr.value.toLowerCase()
+
+  const list = Object.values(tgSignals).filter(p => {
+    if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
+    if (tgSigChannel && p.channel !== tgSigChannel) return false
+    if (tgSigStatus  && p.status  !== tgSigStatus)  return false
+    if (tgSigSearch  && !p.text.toLowerCase().includes(tgSigSearch)) return false
+    return true
+  }).sort((a,b) => (b.addedAt||b.tgDate).localeCompare(a.addedAt||a.tgDate))
+
+  // Aktualizuj filtr kanałów
+  const channels = [...new Set(Object.values(tgSignals).map(p=>p.channel))].sort()
+  if (selCh) {
+    const prev = selCh.value
+    selCh.innerHTML = '<option value="">Wszystkie kanały</option>' +
+      channels.map(c => `<option${c===prev?' selected':''}>${c}</option>`).join('')
+    selCh.value = prev
+  }
+
+  // Statystyki
+  const all = Object.values(tgSignals)
+  const s = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v }
+  s('tgsig-s-all',  all.filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane').length)
+  s('tgsig-s-new',  all.filter(p=>p.status==='Nowy').length)
+  s('tgsig-s-todo', all.filter(p=>p.status==='Do zrobienia'||p.status==='W toku').length)
+  s('tgsig-s-done', all.filter(p=>p.status==='Opublikowane').length)
+
+  const el = document.getElementById('tgsig-cards')
+  if (!el) return
+  if (!list.length) { el.innerHTML = '<div class="empty">Brak sygnałów pasujących do filtrów.</div>'; return }
+
+  el.innerHTML = list.map(p => {
+    const kws = p.keywords ? p.keywords.map(k =>
+      `<span style="font-size:10px;padding:2px 7px;border-radius:10px;background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);font-weight:700">${k}</span>`
+    ).join('') : ''
+    return `<div class="card" id="tgsig-card-${p.id}">
+      <div class="card-head">
+        <span style="font-size:11px;padding:2px 7px;border-radius:10px;background:rgba(0,229,255,.1);color:var(--neon);border:1px solid rgba(0,229,255,.3);font-weight:700">📡 @${p.channel}</span>
+        ${kws}
+        <a class="xlink" href="${p.link||'#'}" target="_blank">Otwórz na TG ↗</a>
+        <span class="post-date">📅 ${(p.tgDate||'').slice(0,16)}</span>
+        <select class="status-sel" style="${statusStyle(p.status)}" onchange="setTgStatus('tgSignals','${p.id}',this.value,renderTgSygnaly)">
+          ${['Nowy','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      ${refLinksHtml('tgsig_'+p.id)}
+      <div class="card-body">
+        <div class="col-orig">
+          <div class="col-label">Oryginał</div>
+          <div class="orig-text" id="tgsig-orig-${p.id}">${p.text}</div>
+        </div>
+        <div class="col-para">
+          <div class="col-label">Twoja parafraza</div>
+          <textarea class="para-area" id="tgsig-para-${p.id}"
+            placeholder="Wklej tutaj swoją parafrazę..."
+            onblur="saveTgPara('tgSignals','${p.id}',this.value)">${p.para||''}</textarea>
+        </div>
+      </div>
+      <div class="card-foot">
+        <button class="btn" id="tgsig-bexp-${p.id}" onclick="toggleTgExpand('tgsig','${p.id}')">Rozwiń</button>
+        <button class="btn" onclick="copyText(document.getElementById('tgsig-orig-${p.id}').innerText)">Kopiuj oryginał</button>
+        <button class="btn btn-info" onclick="copyText(document.getElementById('tgsig-para-${p.id}').value)">Kopiuj parafrazę</button>
+        <span style="font-size:10px;color:var(--text3);margin-left:auto">👁 ${p.views||0} wyświetleń</span>
+        <button class="btn btn-danger" onclick="setTgStatus('tgSignals','${p.id}','Odrzucone',renderTgSygnaly)">Odrzuć</button>
+      </div>
+    </div>`
+  }).join('')
+}
+
+// ── RENDER: TG WPISY ─────────────────────────────────────────────
+function renderTgWpisy() {
+  const selCh = document.getElementById('tgwpisy-channel')
+  const selSt = document.getElementById('tgwpisy-status')
+  const inpSr = document.getElementById('tgwpisy-search')
+  if (selCh) tgWpisChannel = selCh.value
+  if (selSt) tgWpisStatus  = selSt.value
+  if (inpSr) tgWpisSearch  = inpSr.value.toLowerCase()
+
+  const list = Object.values(tgWpisy).filter(p => {
+    if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
+    if (tgWpisChannel && p.channel !== tgWpisChannel) return false
+    if (tgWpisStatus  && p.status  !== tgWpisStatus)  return false
+    if (tgWpisSearch  && !p.text.toLowerCase().includes(tgWpisSearch)) return false
+    return true
+  }).sort((a,b) => (b.addedAt||b.tgDate).localeCompare(a.addedAt||a.tgDate))
+
+  const channels = [...new Set(Object.values(tgWpisy).map(p=>p.channel))].sort()
+  if (selCh) {
+    const prev = selCh.value
+    selCh.innerHTML = '<option value="">Wszystkie kanały</option>' +
+      channels.map(c => `<option${c===prev?' selected':''}>${c}</option>`).join('')
+    selCh.value = prev
+  }
+
+  const all = Object.values(tgWpisy)
+  const s = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v }
+  s('tgwpisy-s-all',  all.filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane').length)
+  s('tgwpisy-s-new',  all.filter(p=>p.status==='Nowy').length)
+  s('tgwpisy-s-todo', all.filter(p=>p.status==='Do zrobienia'||p.status==='W toku').length)
+  s('tgwpisy-s-done', all.filter(p=>p.status==='Opublikowane').length)
+
+  const el = document.getElementById('tgwpisy-cards')
+  if (!el) return
+  if (!list.length) { el.innerHTML = '<div class="empty">Brak wpisów pasujących do filtrów.</div>'; return }
+
+  el.innerHTML = list.map(p => `
+    <div class="card" id="tgwpisy-card-${p.id}">
+      <div class="card-head">
+        <span style="font-size:11px;padding:2px 7px;border-radius:10px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">📋 @${p.channel}</span>
+        <a class="xlink" href="${p.link||'#'}" target="_blank">Otwórz na TG ↗</a>
+        <span class="post-date">📅 ${(p.tgDate||'').slice(0,16)}</span>
+        <select class="status-sel" style="${statusStyle(p.status)}" onchange="setTgStatus('tgWpisy','${p.id}',this.value,renderTgWpisy)">
+          ${['Nowy','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      ${refLinksHtml('tgwpisy_'+p.id)}
+      <div class="card-body">
+        <div class="col-orig">
+          <div class="col-label">Oryginał</div>
+          <div class="orig-text" id="tgwpisy-orig-${p.id}">${p.text}</div>
+        </div>
+        <div class="col-para">
+          <div class="col-label">Twoja parafraza</div>
+          <textarea class="para-area" id="tgwpisy-para-${p.id}"
+            placeholder="Wklej tutaj swoją parafrazę..."
+            onblur="saveTgPara('tgWpisy','${p.id}',this.value)">${p.para||''}</textarea>
+        </div>
+      </div>
+      <div class="card-foot">
+        <button class="btn" id="tgwpisy-bexp-${p.id}" onclick="toggleTgExpand('tgwpisy','${p.id}')">Rozwiń</button>
+        <button class="btn" onclick="copyText(document.getElementById('tgwpisy-orig-${p.id}').innerText)">Kopiuj oryginał</button>
+        <button class="btn btn-info" onclick="copyText(document.getElementById('tgwpisy-para-${p.id}').value)">Kopiuj parafrazę</button>
+        <span style="font-size:10px;color:var(--text3);margin-left:auto">👁 ${p.views||0} wyświetleń</span>
+        <button class="btn btn-danger" onclick="setTgStatus('tgWpisy','${p.id}','Odrzucone',renderTgWpisy)">Odrzuć</button>
+      </div>
+    </div>`
+  ).join('')
+}
+
+// ── TG ACTIONS ────────────────────────────────────────────────────
+async function setTgStatus(collectionName, id, status, rerenderFn) {
+  const store = collectionName === 'tgSignals' ? tgSignals : tgWpisy
+  if (!store[id]) return
+  store[id].status = status
+  const upd = { status }
+  if (status === 'Opublikowane') { store[id].archivedAt = nowStr(); upd.archivedAt = store[id].archivedAt }
+  await updateDoc(doc(db, collectionName, id), upd)
+  if (status === 'Opublikowane') toast('Przeniesiono do Archiwum ✓')
+  updateBadges()
+  rerenderFn()
+}
+
+async function saveTgPara(collectionName, id, value) {
+  const store = collectionName === 'tgSignals' ? tgSignals : tgWpisy
+  if (!store[id] || store[id].para === value) return
+  store[id].para = value
+  await updateDoc(doc(db, collectionName, id), { para: value })
+}
+
+function toggleTgExpand(prefix, id) {
+  const o = document.getElementById(`${prefix}-orig-${id}`)
+  const p = document.getElementById(`${prefix}-para-${id}`)
+  const b = document.getElementById(`${prefix}-bexp-${id}`)
+  if (!o) return
+  const ex = o.classList.contains('expanded')
+  if (!ex) {
+    o.classList.add('expanded')
+    if (p) p.classList.add('expanded')
+    requestAnimationFrame(() => {
+      const hO = o.scrollHeight
+      const hP = p ? p.scrollHeight : 0
+      const maxH = Math.max(hO, hP)
+      o.style.maxHeight = maxH + 'px'
+      if (p) p.style.minHeight = maxH + 'px'
+    })
+  } else {
+    o.classList.remove('expanded')
+    o.style.maxHeight = ''
+    if (p) { p.classList.remove('expanded'); p.style.minHeight = '' }
+  }
+  if (b) b.textContent = ex ? 'Rozwiń' : 'Zwiń'
+}
+
 // ── BUILD HTML ────────────────────────────────────────────────────
 function buildApp() {
   document.getElementById('app').innerHTML = `
@@ -740,12 +946,14 @@ function buildApp() {
     </div>
 
     <div class="tabs">
-      <button class="tab active" data-tab="main"    onclick="switchTab('main')">Wpisy <span class="tab-badge" id="tab-main-badge">0</span></button>
-      <button class="tab"        data-tab="moje"    onclick="switchTab('moje')">Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
-      <button class="tab"        data-tab="archiwum"onclick="switchTab('archiwum')">Archiwum <span class="tab-badge" id="tab-arch-badge">0</span></button>
-      <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
-      <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
-    <button class="tab"        data-tab="kalendarz" onclick="switchTab('kalendarz')">Kalendarz</button>
+      <button class="tab active" data-tab="main"       onclick="switchTab('main')">Wpisy <span class="tab-badge" id="tab-main-badge">0</span></button>
+      <button class="tab"        data-tab="moje"       onclick="switchTab('moje')">Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
+      <button class="tab"        data-tab="archiwum"   onclick="switchTab('archiwum')">Archiwum <span class="tab-badge" id="tab-arch-badge">0</span></button>
+      <button class="tab"        data-tab="notatki"    onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
+      <button class="tab"        data-tab="ref"        onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
+      <button class="tab"        data-tab="tgsygnaly"  onclick="switchTab('tgsygnaly')">📡 TG Sygnały <span class="tab-badge" id="tab-tgsig-badge" style="background:rgba(245,158,11,.25);color:#f59e0b">0</span></button>
+      <button class="tab"        data-tab="tgwpisy"    onclick="switchTab('tgwpisy')">📋 TG Wpisy <span class="tab-badge" id="tab-tgwpisy-badge" style="background:rgba(124,58,237,.25);color:#a78bfa">0</span></button>
+      <button class="tab"        data-tab="kalendarz"  onclick="switchTab('kalendarz')">Kalendarz</button>
     </div>
 
     <!-- WPISY -->
@@ -867,6 +1075,50 @@ function buildApp() {
   
     <!-- KALENDARZ -->
     <div id="page-kalendarz" class="page">
+    </div>
+
+    <!-- TG SYGNAŁY -->
+    <div id="page-tgsygnaly" class="page">
+      <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+        <div class="stat"><div class="stat-n" id="tgsig-s-all"  style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
+        <div class="stat"><div class="stat-n" id="tgsig-s-new"  style="color:#f59e0b">0</div><div class="stat-l">Nowych</div></div>
+        <div class="stat"><div class="stat-n" id="tgsig-s-todo" style="color:var(--neon4)">0</div><div class="stat-l">W toku</div></div>
+        <div class="stat"><div class="stat-n" id="tgsig-s-done" style="color:var(--neon3)">0</div><div class="stat-l">Opublikowanych</div></div>
+      </div>
+      <div class="filters">
+        <select id="tgsig-channel" onchange="renderTgSygnaly()"><option value="">Wszystkie kanały</option></select>
+        <select id="tgsig-status"  onchange="renderTgSygnaly()">
+          <option value="">Wszystkie statusy</option>
+          <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
+        </select>
+        <input id="tgsig-search" placeholder="Szukaj w treści..." oninput="renderTgSygnaly()" style="flex:1;min-width:140px">
+      </div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
+        ⚡ Sygnały filtrowane według słów kluczowych zdefiniowanych w <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">tg_sygnaly.txt</code> na VPS
+      </div>
+      <div id="tgsig-cards"><div class="loading">Ładowanie...</div></div>
+    </div>
+
+    <!-- TG WPISY -->
+    <div id="page-tgwpisy" class="page">
+      <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+        <div class="stat"><div class="stat-n" id="tgwpisy-s-all"  style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
+        <div class="stat"><div class="stat-n" id="tgwpisy-s-new"  style="color:#a78bfa">0</div><div class="stat-l">Nowych</div></div>
+        <div class="stat"><div class="stat-n" id="tgwpisy-s-todo" style="color:var(--neon4)">0</div><div class="stat-l">W toku</div></div>
+        <div class="stat"><div class="stat-n" id="tgwpisy-s-done" style="color:var(--neon3)">0</div><div class="stat-l">Opublikowanych</div></div>
+      </div>
+      <div class="filters">
+        <select id="tgwpisy-channel" onchange="renderTgWpisy()"><option value="">Wszystkie kanały</option></select>
+        <select id="tgwpisy-status"  onchange="renderTgWpisy()">
+          <option value="">Wszystkie statusy</option>
+          <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
+        </select>
+        <input id="tgwpisy-search" placeholder="Szukaj w treści..." oninput="renderTgWpisy()" style="flex:1;min-width:140px">
+      </div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
+        📋 Wszystkie wiadomości z kanałów zdefiniowanych w <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">tg_wpisy.txt</code> na VPS
+      </div>
+      <div id="tgwpisy-cards"><div class="loading">Ładowanie...</div></div>
     </div>
 
   </div><!-- /main-app -->
@@ -1105,6 +1357,7 @@ Object.assign(window, {
   toggleEmojiPanel, addEmoji, emojiClick, removeEmoji,
   copyRefToParaphrase, copyRefFromSelect,
   renderKalendarz, toggleDayPosts, showDayPosts, toggleKPost,
+  renderTgSygnaly, renderTgWpisy, setTgStatus, saveTgPara, toggleTgExpand,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
@@ -1120,6 +1373,19 @@ onAuthStateChanged(auth, async user => {
     updateStats(); updateBadges()
     await syncSheets()
     setInterval(syncSheets, 5 * 60 * 1000)
+    // Odśwież TG dane co 2 minuty (live update bez bota)
+    setInterval(async () => {
+      const [tgs, tgw] = await Promise.all([
+        getDocs(query(collection(db,'tgSignals'), orderBy('addedAt','desc'))),
+        getDocs(query(collection(db,'tgWpisy'),   orderBy('addedAt','desc'))),
+      ])
+      let tgSigNew = 0, tgWpisNew = 0
+      tgs.forEach(d => { if (!tgSignals[d.id]) tgSigNew++; tgSignals[d.id] = d.data() })
+      tgw.forEach(d => { if (!tgWpisy[d.id])   tgWpisNew++; tgWpisy[d.id]  = d.data() })
+      updateBadges()
+      if (tgSigNew > 0) { toast(`📡 ${tgSigNew} nowych sygnałów TG!`); if(document.getElementById('page-tgsygnaly')?.classList.contains('active')) renderTgSygnaly() }
+      if (tgWpisNew > 0) { toast(`📋 ${tgWpisNew} nowych wpisów TG!`); if(document.getElementById('page-tgwpisy')?.classList.contains('active')) renderTgWpisy() }
+    }, 2 * 60 * 1000)
   } else {
     showAuthScreen()
   }
