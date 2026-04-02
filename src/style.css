@@ -199,6 +199,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 ::-webkit-scrollbar-track{background:var(--bg2)}
 ::-webkit-scrollbar-thumb{background:var(--border3);border-radius:3px}
 
+/* NOTE INLINE */
+.card-note{display:flex;align-items:center;gap:8px;padding:5px 14px 6px;border-top:1px solid var(--border);background:rgba(0,0,0,.08)}
+.note-inline{flex:1;background:transparent;border:none;border-bottom:1px solid var(--border2);color:var(--text);font-size:12px;padding:2px 4px;font-family:inherit;outline:none;min-width:0;transition:border-color .2s}
+.note-inline:focus{border-bottom-color:var(--neon)}
+.note-inline::placeholder{color:var(--text3)}
+
 @media(max-width:640px){
   .card-body{grid-template-columns:1fr}
   .col-orig{border-right:none;border-bottom:1px solid var(--border);padding:10px 14px}

@@ -330,6 +330,12 @@ function renderMain() {
             onblur="savePara('${p.id}',this.value)">${p.para||''}</textarea>
         </div>
       </div>
+      <div class="card-note">
+        <span style="font-size:11px;color:var(--text3);white-space:nowrap">📝 Notatka:</span>
+        <input class="note-inline" id="note-${p.id}" value="${(p.note||'').replace(/"/g,'&quot;')}"
+          placeholder="Dodaj notatkę..."
+          onblur="savePostNote('${p.id}',this.value)">
+      </div>
       <div class="card-foot">
         <button class="btn" id="bexp-${p.id}" onclick="toggleExpand('${p.id}')">Rozwiń</button>
         <button class="btn" onclick="copyText(document.getElementById('orig-${p.id}').innerText)">Kopiuj oryginał</button>
@@ -355,6 +361,12 @@ async function savePara(id, value) {
   if (!posts[id] || posts[id].para === value) return
   posts[id].para = value
   await updateDoc(doc(db,'posts',id), { para: value })
+}
+
+async function savePostNote(id, value) {
+  if (!posts[id] || posts[id].note === value) return
+  posts[id].note = value
+  await updateDoc(doc(db,'posts',id), { note: value })
 }
 
 function toggleExpand(id) {
@@ -460,6 +472,12 @@ function renderMoje() {
         `}
       </div>
       ${!editing ? `
+      <div class="card-note" style="padding:5px 14px 6px;border-top:1px solid var(--border)">
+        <span style="font-size:11px;color:var(--text3);white-space:nowrap">📝 Notatka:</span>
+        <input class="note-inline" id="mynote-${p.id}" value="${(p.note||'').replace(/"/g,'&quot;')}"
+          placeholder="Dodaj notatkę..."
+          onblur="saveMyNote('${p.id}',this.value)">
+      </div>
       <div class="mypost-foot">
         <button class="btn" onclick="copyText(\`${p.text.replace(/`/g,"'").replace(/\\/g,'\\\\')}\`)">Kopiuj wpis</button>
         <button class="btn" onclick="startMyEdit('${p.id}')">Edytuj</button>
@@ -512,6 +530,12 @@ async function addMyPost() {
   myPosts[id]=post
   toggleMyForm(false)
   renderMoje(); updateBadges(); toast('Wpis dodany ✓')
+}
+
+async function saveMyNote(id, value) {
+  if (!myPosts[id] || myPosts[id].note === value) return
+  myPosts[id].note = value
+  await updateDoc(doc(db,'myPosts',id), { note: value })
 }
 
 async function publishMyPost(id) {
@@ -653,6 +677,8 @@ function renderRef() {
             <input class="form-input" id="re-name-${r.id}" value="${r.name}"></div>
           <div><div class="form-label">Link (URL)</div>
             <input class="form-input" id="re-url-${r.id}" value="${r.url}"></div>
+          <div><div class="form-label">Notatka</div>
+            <input class="form-input" id="re-note-${r.id}" value="${r.note||''}" placeholder="np. mój ref link, wymaga KYC..."></div>
           <div style="display:flex;gap:6px;margin-top:4px">
             <button class="btn btn-primary" onclick="saveRefEdit('${r.id}')">Zapisz</button>
             <button class="btn" onclick="cancelRefEdit('${r.id}')">Anuluj</button>
@@ -661,6 +687,7 @@ function renderRef() {
       ` : `
         <div class="ref-project">${r.name}</div>
         <div class="ref-link-url">${r.url}</div>
+        ${r.note ? `<div style="font-size:12px;color:var(--text3);margin:4px 0 6px;padding:4px 8px;background:var(--bg3);border-radius:var(--r)">📝 ${r.note}</div>` : ''}
         <div class="ref-actions">
           <button class="btn btn-info" onclick="copyText('${r.url.replace(/'/g,"\\'")}')">Kopiuj link</button>
           <button class="btn" onclick="startRefEdit('${r.id}')">Edytuj</button>
@@ -703,8 +730,9 @@ async function saveRefEdit(id) {
   const r=refLinks[id]; if(!r) return
   const name=document.getElementById(`re-name-${id}`)?.value.trim()||''
   const url =document.getElementById(`re-url-${id}`)?.value.trim()||''
+  const note=document.getElementById(`re-note-${id}`)?.value.trim()||''
   if(!name||!url){toast('Wypełnij oba pola!');return}
-  Object.assign(r,{name,url,_editing:false})
+  Object.assign(r,{name,url,note,_editing:false})
   const save={...r};delete save._editing
   await setDoc(doc(db,'refLinks',id),save)
   toast('Zaktualizowano ✓'); renderRef(); refreshRefInOtherTabs()
@@ -789,6 +817,12 @@ function renderTgSygnaly() {
             onblur="saveTgPara('tgSignals','${p.id}',this.value)">${p.para||''}</textarea>
         </div>
       </div>
+      <div class="card-note">
+        <span style="font-size:11px;color:var(--text3);white-space:nowrap">📝 Notatka:</span>
+        <input class="note-inline" id="tgsig-note-${p.id}" value="${(p.note||'').replace(/"/g,'&quot;')}"
+          placeholder="Dodaj notatkę..."
+          onblur="saveTgNote('tgSignals','${p.id}',this.value)">
+      </div>
       <div class="card-foot">
         <button class="btn" id="tgsig-bexp-${p.id}" onclick="toggleTgExpand('tgsig','${p.id}')">Rozwiń</button>
         <button class="btn" onclick="copyText(document.getElementById('tgsig-orig-${p.id}').innerText)">Kopiuj oryginał</button>
@@ -859,6 +893,12 @@ function renderTgWpisy() {
             onblur="saveTgPara('tgWpisy','${p.id}',this.value)">${p.para||''}</textarea>
         </div>
       </div>
+      <div class="card-note">
+        <span style="font-size:11px;color:var(--text3);white-space:nowrap">📝 Notatka:</span>
+        <input class="note-inline" id="tgwpisy-note-${p.id}" value="${(p.note||'').replace(/"/g,'&quot;')}"
+          placeholder="Dodaj notatkę..."
+          onblur="saveTgNote('tgWpisy','${p.id}',this.value)">
+      </div>
       <div class="card-foot">
         <button class="btn" id="tgwpisy-bexp-${p.id}" onclick="toggleTgExpand('tgwpisy','${p.id}')">Rozwiń</button>
         <button class="btn" onclick="copyText(document.getElementById('tgwpisy-orig-${p.id}').innerText)">Kopiuj oryginał</button>
@@ -888,6 +928,13 @@ async function saveTgPara(collectionName, id, value) {
   if (!store[id] || store[id].para === value) return
   store[id].para = value
   await updateDoc(doc(db, collectionName, id), { para: value })
+}
+
+async function saveTgNote(collectionName, id, value) {
+  const store = collectionName === 'tgSignals' ? tgSignals : tgWpisy
+  if (!store[id] || store[id].note === value) return
+  store[id].note = value
+  await updateDoc(doc(db, collectionName, id), { note: value })
 }
 
 function toggleTgExpand(prefix, id) {
@@ -1348,16 +1395,16 @@ function copyRefFromSelect(selectId) {
 // ── EXPOSE ────────────────────────────────────────────────────────
 Object.assign(window, {
   loginGoogle, logout, switchTab, syncSheets,
-  renderMain, setPostStatus, savePara, toggleExpand, copyText,
+  renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText,
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
-  addMyPost, toggleMyForm, publishMyPost, deleteMyPost,
+  addMyPost, toggleMyForm, publishMyPost, deleteMyPost, saveMyNote,
   renderArchive, restorePost, toggleArchExpand,
   addNote, deleteNote,
   renderRef, toggleRefForm, addRef, startRefEdit, cancelRefEdit, saveRefEdit, deleteRef,
   toggleEmojiPanel, addEmoji, emojiClick, removeEmoji,
   copyRefToParaphrase, copyRefFromSelect,
   renderKalendarz, toggleDayPosts, showDayPosts, toggleKPost,
-  renderTgSygnaly, renderTgWpisy, setTgStatus, saveTgPara, toggleTgExpand,
+  renderTgSygnaly, renderTgWpisy, setTgStatus, saveTgPara, saveTgNote, toggleTgExpand,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
