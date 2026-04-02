@@ -761,13 +761,13 @@ function renderTgSygnaly() {
   if (selSt) tgSigStatus  = selSt.value
   if (inpSr) tgSigSearch  = inpSr.value.toLowerCase()
 
-  const list = Object.values(tgSignals).filter(p => {
+  const list = Object.entries(tgSignals).filter(([docId, p]) => {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
     if (tgSigChannel && p.channel !== tgSigChannel) return false
     if (tgSigStatus  && p.status  !== tgSigStatus)  return false
     if (tgSigSearch  && !p.text.toLowerCase().includes(tgSigSearch)) return false
     return true
-  }).sort((a,b) => (b.addedAt||b.tgDate).localeCompare(a.addedAt||a.tgDate))
+  }).sort(([,a],[,b]) => (b.addedAt||b.tgDate).localeCompare(a.addedAt||a.tgDate))
 
   // Aktualizuj filtr kanałów
   const channels = [...new Set(Object.values(tgSignals).map(p=>p.channel))].sort()
@@ -790,45 +790,45 @@ function renderTgSygnaly() {
   if (!el) return
   if (!list.length) { el.innerHTML = '<div class="empty">Brak sygnałów pasujących do filtrów.</div>'; return }
 
-  el.innerHTML = list.map(p => {
+  el.innerHTML = list.map(([docId, p]) => {
     const kws = p.keywords ? p.keywords.map(k =>
       `<span style="font-size:10px;padding:2px 7px;border-radius:10px;background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);font-weight:700">${k}</span>`
     ).join('') : ''
-    return `<div class="card" id="tgsig-card-${p.id}">
+    return `<div class="card" id="tgsig-card-${docId}">
       <div class="card-head">
         <span style="font-size:11px;padding:2px 7px;border-radius:10px;background:rgba(0,229,255,.1);color:var(--neon);border:1px solid rgba(0,229,255,.3);font-weight:700">📡 @${p.channel}</span>
         ${kws}
         <a class="xlink" href="${p.link||'#'}" target="_blank">Otwórz na TG ↗</a>
         <span class="post-date">📅 ${(p.tgDate||'').slice(0,16)}</span>
-        <select class="status-sel" style="${statusStyle(p.status)}" onchange="setTgStatus('tgSignals','${p.id}',this.value,renderTgSygnaly)">
+        <select class="status-sel" style="${statusStyle(p.status)}" onchange="setTgStatus('tgSignals','${docId}',this.value,renderTgSygnaly)">
           ${['Nowy','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
         </select>
       </div>
-      ${refLinksHtml('tgsig_'+p.id)}
+      ${refLinksHtml('tgsig_'+docId)}
       <div class="card-body">
         <div class="col-orig">
           <div class="col-label">Oryginał</div>
-          <div class="orig-text" id="tgsig-orig-${p.id}">${p.text}</div>
+          <div class="orig-text" id="tgsig-orig-${docId}">${p.text}</div>
         </div>
         <div class="col-para">
           <div class="col-label">Twoja parafraza</div>
-          <textarea class="para-area" id="tgsig-para-${p.id}"
+          <textarea class="para-area" id="tgsig-para-${docId}"
             placeholder="Wklej tutaj swoją parafrazę..."
-            onblur="saveTgPara('tgSignals','${p.id}',this.value)">${p.para||''}</textarea>
+            onblur="saveTgPara('tgSignals','${docId}',this.value)">${p.para||''}</textarea>
         </div>
       </div>
       <div class="card-note">
         <span style="font-size:11px;color:var(--text3);white-space:nowrap">📝 Notatka:</span>
-        <input class="note-inline" id="tgsig-note-${p.id}" value="${(p.note||'').replace(/"/g,'&quot;')}"
+        <input class="note-inline" id="tgsig-note-${docId}" value="${(p.note||'').replace(/"/g,'&quot;')}"
           placeholder="Dodaj notatkę..."
-          onblur="saveTgNote('tgSignals','${p.id}',this.value)">
+          onblur="saveTgNote('tgSignals','${docId}',this.value)">
       </div>
       <div class="card-foot">
-        <button class="btn" id="tgsig-bexp-${p.id}" onclick="toggleTgExpand('tgsig','${p.id}')">Rozwiń</button>
-        <button class="btn" onclick="copyText(document.getElementById('tgsig-orig-${p.id}').innerText)">Kopiuj oryginał</button>
-        <button class="btn btn-info" onclick="copyText(document.getElementById('tgsig-para-${p.id}').value)">Kopiuj parafrazę</button>
+        <button class="btn" id="tgsig-bexp-${docId}" onclick="toggleTgExpand('tgsig','${docId}')">Rozwiń</button>
+        <button class="btn" onclick="copyText(document.getElementById('tgsig-orig-${docId}').innerText)">Kopiuj oryginał</button>
+        <button class="btn btn-info" onclick="copyText(document.getElementById('tgsig-para-${docId}').value)">Kopiuj parafrazę</button>
         <span style="font-size:10px;color:var(--text3);margin-left:auto">👁 ${p.views||0} wyświetleń</span>
-        <button class="btn btn-danger" onclick="setTgStatus('tgSignals','${p.id}','Odrzucone',renderTgSygnaly)">Odrzuć</button>
+        <button class="btn btn-danger" onclick="setTgStatus('tgSignals','${docId}','Odrzucone',renderTgSygnaly)">Odrzuć</button>
       </div>
     </div>`
   }).join('')
@@ -843,13 +843,13 @@ function renderTgWpisy() {
   if (selSt) tgWpisStatus  = selSt.value
   if (inpSr) tgWpisSearch  = inpSr.value.toLowerCase()
 
-  const list = Object.values(tgWpisy).filter(p => {
+  const list = Object.entries(tgWpisy).filter(([docId, p]) => {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
     if (tgWpisChannel && p.channel !== tgWpisChannel) return false
     if (tgWpisStatus  && p.status  !== tgWpisStatus)  return false
     if (tgWpisSearch  && !p.text.toLowerCase().includes(tgWpisSearch)) return false
     return true
-  }).sort((a,b) => (b.addedAt||b.tgDate).localeCompare(a.addedAt||a.tgDate))
+  }).sort(([,a],[,b]) => (b.addedAt||b.tgDate).localeCompare(a.addedAt||a.tgDate))
 
   const channels = [...new Set(Object.values(tgWpisy).map(p=>p.channel))].sort()
   if (selCh) {
@@ -870,71 +870,72 @@ function renderTgWpisy() {
   if (!el) return
   if (!list.length) { el.innerHTML = '<div class="empty">Brak wpisów pasujących do filtrów.</div>'; return }
 
-  el.innerHTML = list.map(p => `
-    <div class="card" id="tgwpisy-card-${p.id}">
+  el.innerHTML = list.map(([docId, p]) => `
+    <div class="card" id="tgwpisy-card-${docId}">
       <div class="card-head">
         <span style="font-size:11px;padding:2px 7px;border-radius:10px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">📋 @${p.channel}</span>
         <a class="xlink" href="${p.link||'#'}" target="_blank">Otwórz na TG ↗</a>
         <span class="post-date">📅 ${(p.tgDate||'').slice(0,16)}</span>
-        <select class="status-sel" style="${statusStyle(p.status)}" onchange="setTgStatus('tgWpisy','${p.id}',this.value,renderTgWpisy)">
+        <select class="status-sel" style="${statusStyle(p.status)}" onchange="setTgStatus('tgWpisy','${docId}',this.value,renderTgWpisy)">
           ${['Nowy','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
         </select>
       </div>
-      ${refLinksHtml('tgwpisy_'+p.id)}
+      ${refLinksHtml('tgwpisy_'+docId)}
       <div class="card-body">
         <div class="col-orig">
           <div class="col-label">Oryginał</div>
-          <div class="orig-text" id="tgwpisy-orig-${p.id}">${p.text}</div>
+          <div class="orig-text" id="tgwpisy-orig-${docId}">${p.text}</div>
         </div>
         <div class="col-para">
           <div class="col-label">Twoja parafraza</div>
-          <textarea class="para-area" id="tgwpisy-para-${p.id}"
+          <textarea class="para-area" id="tgwpisy-para-${docId}"
             placeholder="Wklej tutaj swoją parafrazę..."
-            onblur="saveTgPara('tgWpisy','${p.id}',this.value)">${p.para||''}</textarea>
+            onblur="saveTgPara('tgWpisy','${docId}',this.value)">${p.para||''}</textarea>
         </div>
       </div>
       <div class="card-note">
         <span style="font-size:11px;color:var(--text3);white-space:nowrap">📝 Notatka:</span>
-        <input class="note-inline" id="tgwpisy-note-${p.id}" value="${(p.note||'').replace(/"/g,'&quot;')}"
+        <input class="note-inline" id="tgwpisy-note-${docId}" value="${(p.note||'').replace(/"/g,'&quot;')}"
           placeholder="Dodaj notatkę..."
-          onblur="saveTgNote('tgWpisy','${p.id}',this.value)">
+          onblur="saveTgNote('tgWpisy','${docId}',this.value)">
       </div>
       <div class="card-foot">
-        <button class="btn" id="tgwpisy-bexp-${p.id}" onclick="toggleTgExpand('tgwpisy','${p.id}')">Rozwiń</button>
-        <button class="btn" onclick="copyText(document.getElementById('tgwpisy-orig-${p.id}').innerText)">Kopiuj oryginał</button>
-        <button class="btn btn-info" onclick="copyText(document.getElementById('tgwpisy-para-${p.id}').value)">Kopiuj parafrazę</button>
+        <button class="btn" id="tgwpisy-bexp-${docId}" onclick="toggleTgExpand('tgwpisy','${docId}')">Rozwiń</button>
+        <button class="btn" onclick="copyText(document.getElementById('tgwpisy-orig-${docId}').innerText)">Kopiuj oryginał</button>
+        <button class="btn btn-info" onclick="copyText(document.getElementById('tgwpisy-para-${docId}').value)">Kopiuj parafrazę</button>
         <span style="font-size:10px;color:var(--text3);margin-left:auto">👁 ${p.views||0} wyświetleń</span>
-        <button class="btn btn-danger" onclick="setTgStatus('tgWpisy','${p.id}','Odrzucone',renderTgWpisy)">Odrzuć</button>
+        <button class="btn btn-danger" onclick="setTgStatus('tgWpisy','${docId}','Odrzucone',renderTgWpisy)">Odrzuć</button>
       </div>
     </div>`
   ).join('')
 }
 
 // ── TG ACTIONS ────────────────────────────────────────────────────
-async function setTgStatus(collectionName, id, status, rerenderFn) {
+async function setTgStatus(collectionName, docId, status, rerenderFn) {
   const store = collectionName === 'tgSignals' ? tgSignals : tgWpisy
-  if (!store[id]) return
-  store[id].status = status
+  // docId to klucz dokumentu Firestore (np. tgs_kanal_123), nie p.id
+  if (!store[docId]) return
+  store[docId].status = status
   const upd = { status }
-  if (status === 'Opublikowane') { store[id].archivedAt = nowStr(); upd.archivedAt = store[id].archivedAt }
-  await updateDoc(doc(db, collectionName, id), upd)
+  if (status === 'Opublikowane') { store[docId].archivedAt = nowStr(); upd.archivedAt = store[docId].archivedAt }
+  await updateDoc(doc(db, collectionName, docId), upd)
   if (status === 'Opublikowane') toast('Przeniesiono do Archiwum ✓')
   updateBadges()
   rerenderFn()
 }
 
-async function saveTgPara(collectionName, id, value) {
+async function saveTgPara(collectionName, docId, value) {
   const store = collectionName === 'tgSignals' ? tgSignals : tgWpisy
-  if (!store[id] || store[id].para === value) return
-  store[id].para = value
-  await updateDoc(doc(db, collectionName, id), { para: value })
+  if (!store[docId] || store[docId].para === value) return
+  store[docId].para = value
+  await updateDoc(doc(db, collectionName, docId), { para: value })
 }
 
-async function saveTgNote(collectionName, id, value) {
+async function saveTgNote(collectionName, docId, value) {
   const store = collectionName === 'tgSignals' ? tgSignals : tgWpisy
-  if (!store[id] || store[id].note === value) return
-  store[id].note = value
-  await updateDoc(doc(db, collectionName, id), { note: value })
+  if (!store[docId] || store[docId].note === value) return
+  store[docId].note = value
+  await updateDoc(doc(db, collectionName, docId), { note: value })
 }
 
 function toggleTgExpand(prefix, id) {
