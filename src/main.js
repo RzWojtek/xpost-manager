@@ -19,6 +19,7 @@ let refLinks   = {}
 let notes      = {}
 let tgSignals  = {}
 let tgWpisy    = {}
+let konta      = {}   // kategorie kont: { katId: { id, name, icon, note, accounts: [{id,name,note}] } }
 let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
 
 // Filter state — zarządzane lokalnie
@@ -157,14 +158,15 @@ async function logout() {
 
 // ── FIREBASE LOAD ─────────────────────────────────────────────────
 async function loadAll() {
-  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}
-  const [ps, ms, rs, ns, tgs, tgw] = await Promise.all([
+  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}
+  const [ps, ms, rs, ns, tgs, tgw, ks] = await Promise.all([
     getDocs(query(collection(db,'posts'),      orderBy('xDate','desc'))),
     getDocs(query(collection(db,'myPosts'),    orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
     getDocs(query(collection(db,'notes'),      orderBy('created','desc'))),
     getDocs(query(collection(db,'tgSignals'),  orderBy('addedAt','desc'))),
     getDocs(query(collection(db,'tgWpisy'),    orderBy('addedAt','desc'))),
+    getDocs(collection(db,'konta')),
   ])
   ps.forEach(d  => { posts[d.id]     = d.data() })
   ms.forEach(d  => { myPosts[d.id]   = d.data() })
@@ -172,6 +174,7 @@ async function loadAll() {
   ns.forEach(d  => { notes[d.id]     = d.data() })
   tgs.forEach(d => { tgSignals[d.id] = d.data() })
   tgw.forEach(d => { tgWpisy[d.id]   = d.data() })
+  ks.forEach(d  => { konta[d.id]     = d.data() })
 }
 
 // ── SHEETS SYNC ───────────────────────────────────────────────────
@@ -222,7 +225,7 @@ function switchTab(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
   document.querySelector(`.tab[data-tab="${name}"]`).classList.add('active')
   document.getElementById(`page-${name}`).classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, archiwum:renderArchive, notatki:renderNotes, ref:renderRef, kalendarz:renderKalendarz, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy}
+  const fn = {main:renderMain, moje:renderMoje, archiwum:renderArchive, notatki:renderNotes, ref:renderRef, kalendarz:renderKalendarz, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, konta:renderKonta}
   if (fn[name]) fn[name]()
 }
 
@@ -410,12 +413,13 @@ function updateStats() {
 
 function updateBadges() {
   const s = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v }
-  s('tab-main-badge',  Object.values(posts).filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane').length)
-  s('tab-moje-badge',  Object.keys(myPosts).length)
-  s('tab-arch-badge',  Object.values(posts).filter(p=>p.status==='Opublikowane').length)
-  s('tab-notes-badge', Object.keys(notes).length)
-  s('tab-ref-badge',   Object.keys(refLinks).length)
-  s('tab-tgsig-badge', Object.values(tgSignals).filter(p=>p.status==='Nowy').length)
+  s('tab-main-badge',   Object.values(posts).filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane').length)
+  s('tab-moje-badge',   Object.keys(myPosts).length)
+  s('tab-arch-badge',   Object.values(posts).filter(p=>p.status==='Opublikowane').length)
+  s('tab-notes-badge',  Object.keys(notes).length)
+  s('tab-ref-badge',    Object.keys(refLinks).length)
+  s('tab-konta-badge',  Object.values(konta).reduce((sum,k)=>(k.accounts||[]).length+sum, 0))
+  s('tab-tgsig-badge',  Object.values(tgSignals).filter(p=>p.status==='Nowy').length)
   s('tab-tgwpisy-badge',Object.values(tgWpisy).filter(p=>p.status==='Nowy').length)
 }
 
@@ -910,6 +914,171 @@ function renderTgWpisy() {
   ).join('')
 }
 
+// ── RENDER: KONTA ────────────────────────────────────────────────
+function renderKonta() {
+  const el = document.getElementById('konta-cards')
+  if (!el) return
+  const list = Object.entries(konta).sort(([,a],[,b]) => a.name.localeCompare(b.name))
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">Brak kategorii kont. Kliknij "+ Dodaj kategorię" aby zacząć.</div>'
+    return
+  }
+  el.innerHTML = list.map(([katId, kat]) => {
+    const accounts = kat.accounts || []
+    const editingKat = !!kat._editingKat
+    return `<div class="konta-card" id="konta-card-${katId}">
+      <div class="konta-head">
+        <span class="konta-icon">${kat.icon||'👤'}</span>
+        ${editingKat ? `
+          <input class="form-input" id="kat-edit-name-${katId}" value="${kat.name}" style="flex:1;max-width:180px">
+          <input class="form-input" id="kat-edit-icon-${katId}" value="${kat.icon||''}" style="max-width:70px" placeholder="emoji">
+          <button class="btn btn-primary" style="font-size:11px;padding:3px 10px" onclick="saveKatEdit('${katId}')">Zapisz</button>
+          <button class="btn" style="font-size:11px;padding:3px 8px" onclick="cancelKatEdit('${katId}')">Anuluj</button>
+        ` : `
+          <span class="konta-title">${kat.name}</span>
+          <span style="font-size:11px;color:var(--text3)">${accounts.length} ${accounts.length===1?'konto':accounts.length<5?'konta':'kont'}</span>
+          <button class="btn ml-auto" style="font-size:11px;padding:3px 8px" onclick="startKatEdit('${katId}')">Edytuj</button>
+          <button class="btn btn-danger" style="font-size:11px;padding:3px 8px" onclick="deleteKategoria('${katId}')">Usuń</button>
+        `}
+      </div>
+      ${kat.note && !editingKat ? `<div class="konta-note-display">📝 ${kat.note}</div>` : ''}
+      ${editingKat ? `
+        <div style="padding:8px 14px;border-bottom:1px solid var(--border)">
+          <div class="form-label">Notatka kategorii</div>
+          <input class="form-input" id="kat-edit-note-${katId}" value="${kat.note||''}" placeholder="Notatka...">
+        </div>
+      ` : ''}
+
+      <div class="konta-accounts">
+        ${accounts.map((acc, idx) => `
+          <div class="konta-acc-row" id="acc-row-${katId}-${idx}">
+            ${acc._editing ? `
+              <input class="form-input" id="acc-edit-name-${katId}-${idx}" value="${acc.name}" style="flex:1">
+              <input class="form-input" id="acc-edit-note-${katId}-${idx}" value="${acc.note||''}" placeholder="notatka..." style="flex:1">
+              <button class="btn btn-primary" style="font-size:11px;padding:3px 10px" onclick="saveAccEdit('${katId}',${idx})">Zapisz</button>
+              <button class="btn" style="font-size:11px;padding:3px 8px" onclick="cancelAccEdit('${katId}',${idx})">Anuluj</button>
+            ` : `
+              <button class="konta-copy-btn" onclick="copyText('${acc.name.replace(/'/g,"\\'")}');this.textContent='✓';setTimeout(()=>this.textContent='${acc.name.replace(/'/g,"\\'")}',1200)" title="Kliknij aby skopiować">${acc.name}</button>
+              ${acc.note ? `<span class="konta-acc-note">📝 ${acc.note}</span>` : ''}
+              <div class="konta-acc-actions">
+                <button class="btn" style="font-size:10px;padding:2px 7px" onclick="startAccEdit('${katId}',${idx})">Edytuj</button>
+                <button class="btn btn-danger" style="font-size:10px;padding:2px 7px" onclick="deleteAccount('${katId}',${idx})">Usuń</button>
+              </div>
+            `}
+          </div>`).join('')}
+      </div>
+
+      <div class="konta-add-row">
+        <input class="form-input" id="new-acc-name-${katId}" placeholder="Nazwa konta (np. @WojciechK)" style="flex:1"
+          onkeydown="if(event.key==='Enter') addAccount('${katId}')">
+        <input class="form-input" id="new-acc-note-${katId}" placeholder="Notatka (opcjonalnie)" style="flex:1"
+          onkeydown="if(event.key==='Enter') addAccount('${katId}')">
+        <button class="btn btn-primary" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="addAccount('${katId}')">+ Dodaj konto</button>
+      </div>
+    </div>`
+  }).join('')
+}
+
+// ── KONTA ACTIONS ─────────────────────────────────────────────────
+function toggleKatForm(show) {
+  const f = document.getElementById('kat-form')
+  const b = document.getElementById('btn-add-kat')
+  if (!f||!b) return
+  if (show === undefined) show = f.style.display === 'none'
+  f.style.display = show ? 'block' : 'none'
+  b.textContent   = show ? '✕ Zamknij' : '+ Dodaj kategorię'
+  if (show) {
+    const n = document.getElementById('kat-name')
+    const i = document.getElementById('kat-icon')
+    const t = document.getElementById('kat-note')
+    if (n) n.value = ''
+    if (i) i.value = ''
+    if (t) t.value = ''
+  }
+}
+
+async function addKategoria() {
+  const name = document.getElementById('kat-name')?.value.trim()
+  const icon = document.getElementById('kat-icon')?.value.trim() || '👤'
+  const note = document.getElementById('kat-note')?.value.trim() || ''
+  if (!name) { toast('Wpisz nazwę kategorii!'); return }
+  const id = uid()
+  const kat = { id, name, icon, note, accounts: [], addedAt: nowStr() }
+  await setDoc(doc(db, 'konta', id), kat)
+  konta[id] = kat
+  toggleKatForm(false)
+  renderKonta(); updateBadges(); toast('Kategoria dodana ✓')
+}
+
+function startKatEdit(katId) {
+  if (konta[katId]) { konta[katId]._editingKat = true; renderKonta() }
+}
+function cancelKatEdit(katId) {
+  if (konta[katId]) { konta[katId]._editingKat = false; renderKonta() }
+}
+
+async function saveKatEdit(katId) {
+  const kat = konta[katId]; if (!kat) return
+  const name = document.getElementById(`kat-edit-name-${katId}`)?.value.trim() || kat.name
+  const icon = document.getElementById(`kat-edit-icon-${katId}`)?.value.trim() || kat.icon
+  const note = document.getElementById(`kat-edit-note-${katId}`)?.value.trim() || ''
+  Object.assign(kat, { name, icon, note, _editingKat: false })
+  const save = { ...kat }; delete save._editingKat
+  await setDoc(doc(db, 'konta', katId), save)
+  toast('Zaktualizowano ✓'); renderKonta(); updateBadges()
+}
+
+async function deleteKategoria(katId) {
+  if (!confirm('Usunąć całą kategorię wraz z kontami?')) return
+  await deleteDoc(doc(db, 'konta', katId))
+  delete konta[katId]
+  renderKonta(); updateBadges(); toast('Usunięto ✓')
+}
+
+async function addAccount(katId) {
+  const kat = konta[katId]; if (!kat) return
+  const nameEl = document.getElementById(`new-acc-name-${katId}`)
+  const noteEl = document.getElementById(`new-acc-note-${katId}`)
+  const name = nameEl?.value.trim()
+  const note = noteEl?.value.trim() || ''
+  if (!name) { toast('Wpisz nazwę konta!'); return }
+  if (!kat.accounts) kat.accounts = []
+  kat.accounts.push({ name, note })
+  const save = { ...kat }; delete save._editingKat
+  await setDoc(doc(db, 'konta', katId), save)
+  if (nameEl) nameEl.value = ''
+  if (noteEl) noteEl.value = ''
+  renderKonta(); updateBadges(); toast('Konto dodane ✓')
+}
+
+function startAccEdit(katId, idx) {
+  if (konta[katId]?.accounts?.[idx]) { konta[katId].accounts[idx]._editing = true; renderKonta() }
+}
+function cancelAccEdit(katId, idx) {
+  if (konta[katId]?.accounts?.[idx]) { konta[katId].accounts[idx]._editing = false; renderKonta() }
+}
+
+async function saveAccEdit(katId, idx) {
+  const kat = konta[katId]; if (!kat?.accounts?.[idx]) return
+  const name = document.getElementById(`acc-edit-name-${katId}-${idx}`)?.value.trim() || ''
+  const note = document.getElementById(`acc-edit-note-${katId}-${idx}`)?.value.trim() || ''
+  if (!name) { toast('Wpisz nazwę konta!'); return }
+  kat.accounts[idx] = { name, note }
+  const save = { ...kat }; delete save._editingKat
+  save.accounts = save.accounts.map(a => { const c={...a}; delete c._editing; return c })
+  await setDoc(doc(db, 'konta', katId), save)
+  toast('Zaktualizowano ✓'); renderKonta()
+}
+
+async function deleteAccount(katId, idx) {
+  const kat = konta[katId]; if (!kat?.accounts) return
+  kat.accounts.splice(idx, 1)
+  const save = { ...kat }; delete save._editingKat
+  save.accounts = save.accounts.map(a => { const c={...a}; delete c._editing; return c })
+  await setDoc(doc(db, 'konta', katId), save)
+  renderKonta(); updateBadges(); toast('Usunięto ✓')
+}
+
 // ── TG ACTIONS ────────────────────────────────────────────────────
 async function setTgStatus(collectionName, docId, status, rerenderFn) {
   const store = collectionName === 'tgSignals' ? tgSignals : tgWpisy
@@ -999,6 +1168,7 @@ function buildApp() {
       <button class="tab"        data-tab="archiwum"   onclick="switchTab('archiwum')">Archiwum <span class="tab-badge" id="tab-arch-badge">0</span></button>
       <button class="tab"        data-tab="notatki"    onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
       <button class="tab"        data-tab="ref"        onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
+      <button class="tab"        data-tab="konta"      onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
       <button class="tab"        data-tab="tgsygnaly"  onclick="switchTab('tgsygnaly')">📡 TG Sygnały <span class="tab-badge" id="tab-tgsig-badge" style="background:rgba(245,158,11,.25);color:#f59e0b">0</span></button>
       <button class="tab"        data-tab="tgwpisy"    onclick="switchTab('tgwpisy')">📋 TG Wpisy <span class="tab-badge" id="tab-tgwpisy-badge" style="background:rgba(124,58,237,.25);color:#a78bfa">0</span></button>
       <button class="tab"        data-tab="kalendarz"  onclick="switchTab('kalendarz')">Kalendarz</button>
@@ -1167,6 +1337,40 @@ function buildApp() {
         📋 Wszystkie wiadomości z kanałów zdefiniowanych w <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">tg_wpisy.txt</code> na VPS
       </div>
       <div id="tgwpisy-cards"><div class="loading">Ładowanie...</div></div>
+    </div>
+
+    <!-- KONTA -->
+    <div id="page-konta" class="page">
+      <div class="section-header">
+        <span style="font-size:13px;color:var(--text2)">Kategorie kont z możliwością kopiowania jednym kliknięciem</span>
+        <button class="btn-add" id="btn-add-kat" onclick="toggleKatForm()">+ Dodaj kategorię</button>
+      </div>
+      <div id="kat-form" style="display:none">
+        <div class="form-card" style="margin-bottom:16px">
+          <div class="form-title">Nowa kategoria kont</div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Nazwa kategorii</div>
+              <input class="form-input" id="kat-name" placeholder="np. Twitter, Telegram, Email...">
+            </div>
+            <div>
+              <div class="form-label">Ikona (emoji)</div>
+              <input class="form-input" id="kat-icon" placeholder="np. 𝕏 📱 📧" maxlength="4" style="max-width:100px">
+            </div>
+          </div>
+          <div class="form-row full">
+            <div>
+              <div class="form-label">Notatka do kategorii</div>
+              <input class="form-input" id="kat-note" placeholder="np. konta do airdropów, konta główne...">
+            </div>
+          </div>
+          <div class="form-btns">
+            <button class="btn btn-primary" onclick="addKategoria()">Dodaj kategorię</button>
+            <button class="btn" onclick="toggleKatForm(false)">Anuluj</button>
+          </div>
+        </div>
+      </div>
+      <div id="konta-cards"></div>
     </div>
 
   </div><!-- /main-app -->
@@ -1406,6 +1610,8 @@ Object.assign(window, {
   copyRefToParaphrase, copyRefFromSelect,
   renderKalendarz, toggleDayPosts, showDayPosts, toggleKPost,
   renderTgSygnaly, renderTgWpisy, setTgStatus, saveTgPara, saveTgNote, toggleTgExpand,
+  renderKonta, toggleKatForm, addKategoria, startKatEdit, cancelKatEdit, saveKatEdit, deleteKategoria,
+  addAccount, startAccEdit, cancelAccEdit, saveAccEdit, deleteAccount,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
@@ -1417,7 +1623,7 @@ onAuthStateChanged(auth, async user => {
     await loadAll()
     await loadEmojis()
     renderEmojiPanel()
-    renderMain(); renderMoje(); renderNotes(); renderRef()
+    renderMain(); renderMoje(); renderNotes(); renderRef(); renderKonta()
     updateStats(); updateBadges()
     await syncSheets()
     setInterval(syncSheets, 5 * 60 * 1000)
