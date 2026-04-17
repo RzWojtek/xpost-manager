@@ -432,7 +432,7 @@ function renderMoje() {
 
   el.innerHTML = list.map(p => {
     const editing = !!p._editing
-    return `<div class="mypost-card" id="mycard-${p.id}">
+    return `<div class="mypost-card${p.status==='Opublikowane'?' is-published':''}" id="mycard-${p.id}">
       <div class="mypost-head">
         <span style="font-size:12px;font-weight:700;color:var(--text2)">Mój wpis</span>
         ${p.tags ? `<span style="font-size:11px;color:var(--neon)">${p.tags}</span>` : ''}
