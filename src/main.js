@@ -191,6 +191,10 @@ async function syncSheets() {
     for (const row of values) {
       const id = (row[COL.id] || '').trim()
       if (!id || posts[id]) continue
+      // Pomijaj retweety — pobieramy tylko oryginalne posty
+      const isRT = (row[COL.type]||'').trim().toUpperCase()==='RT'
+                || (row[COL.account]||'').includes(' RT @')
+      if (isRT) continue
       const post = {
         id,
         account: row[COL.account] || '',
@@ -276,8 +280,12 @@ function renderMain() {
     return true
   }).sort((a,b) => (b.xDate||b.addedAt).localeCompare(a.xDate||a.addedAt))
 
-  // Odśwież listę kont w filtrze
-  const accounts = [...new Set(Object.values(posts).map(p=>p.account))].sort()
+  // Odśwież listę kont w filtrze — tylko konta które mają aktywne wpisy
+  const accounts = [...new Set(
+    Object.values(posts)
+      .filter(p => p.status !== 'Odrzucone' && p.status !== 'Opublikowane')
+      .map(p => p.account)
+  )].sort()
   if (selAcc) {
     const prev = selAcc.value
     selAcc.innerHTML = '<option value="">Wszystkie konta</option>' +
