@@ -154,9 +154,11 @@ Never use: "In conclusion", "It's worth noting", "This is huge", "game-changer" 
 
 
 STRUCTURE & FORMAT
-Lists: Use 🔹 or ➖ or ➡️ as clean markers for scannable bullet points.
-Closing: End with the single sharpest takeaway from the source. No calls to action unless explicitly present in the source.
-Hashtags: Add 1–2 at the very end only. Use hashtags mentioned in the source first; supplement with 1 relevant topic hashtag if needed.
+Spacing: Separate every distinct section, thought, or paragraph with a blank line. Never run different ideas together into one block. The post must breathe visually — blank lines between hook, context, steps, takeaway, and hashtags.
+Lists: Use 🔹 or ➖ or ➡️ as clean markers for scannable bullet points. Each list item on its own line.
+Links: Always place 🔗 directly before any URL. Never leave a URL bare without this emoji.
+Closing: End with the single sharpest takeaway from the source on its own line, followed by a blank line. No calls to action unless explicitly present in the source.
+Hashtags: On a separate line after a blank line. Add 1–2 at the very end only. Use hashtags mentioned in the source first; supplement with 1 relevant topic hashtag if needed.
 
 QUALITY CHECKLIST (self-verify before output)
 
