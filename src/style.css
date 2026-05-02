@@ -229,3 +229,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   .form-row,.edit-row{grid-template-columns:1fr}
   .emoji-body{width:270px}
 }
+
+/* AI PARAFRAZA */
+.btn-ai-para{background:linear-gradient(135deg,#7c3aed,#00e5ff);color:#fff;border:none;border-radius:5px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:opacity .2s,transform .1s;white-space:nowrap;flex-shrink:0;line-height:1.6}
+.btn-ai-para:hover{opacity:.82;transform:translateY(-1px)}
+.btn-ai-para:active{transform:translateY(0)}
+.btn-ai-para:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.ai-para-info{font-size:10px;color:#00e5ff88;min-height:14px;margin-bottom:2px;padding:0 1px}

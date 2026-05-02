@@ -12,6 +12,237 @@ const API_KEY   = import.meta.env.VITE_SHEETS_API_KEY
 // Kolumny Sheets (0-indexed): A=data B=konto C=tekst D=link E=linki F=id G=done H=zdjecia
 const COL = { date:0, account:1, text:2, link:3, links:4, id:5, img:7, type:8 }
 
+// ── AI PARAFRAZA — SYSTEM ROTACJI MODELI ─────────────────────────
+const AI_MODELS = [
+  {
+    id: 'groq_llama33',
+    name: 'Groq llama-3.3-70b',
+    type: 'openai',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
+    model: 'llama-3.3-70b-versatile',
+    envKey: 'VITE_GROQ_API_KEY',
+    resetMs: 62 * 1000,
+  },
+  {
+    id: 'gemini_flash',
+    name: 'Gemini 2.0 Flash',
+    type: 'gemini',
+    url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+    envKey: 'VITE_GEMINI_API_KEY',
+    resetMs: 62 * 1000,
+  },
+  {
+    id: 'cerebras_llama',
+    name: 'Cerebras llama3.1-8b',
+    type: 'openai',
+    url: 'https://api.cerebras.ai/v1/chat/completions',
+    model: 'llama3.1-8b',
+    envKey: 'VITE_CEREBRAS_API_KEY',
+    resetMs: 60 * 60 * 1000,
+  },
+  {
+    id: 'sambanova_llama',
+    name: 'SambaNova Llama-3.1-70B',
+    type: 'openai',
+    url: 'https://api.sambanova.ai/v1/chat/completions',
+    model: 'Meta-Llama-3.1-70B-Instruct',
+    envKey: 'VITE_SAMBANOVA_API_KEY',
+    resetMs: 60 * 60 * 1000,
+  },
+  {
+    id: 'openrouter_deepseek',
+    name: 'OpenRouter DeepSeek-R1',
+    type: 'openai',
+    url: 'https://openrouter.ai/api/v1/chat/completions',
+    model: 'deepseek/deepseek-r1:free',
+    envKey: 'VITE_OPENROUTER_API_KEY',
+    resetMs: 60 * 60 * 1000,
+  },
+  {
+    id: 'openrouter_llama33',
+    name: 'OpenRouter Llama-3.3-70b',
+    type: 'openai',
+    url: 'https://openrouter.ai/api/v1/chat/completions',
+    model: 'meta-llama/llama-3.3-70b-instruct:free',
+    envKey: 'VITE_OPENROUTER_API_KEY',
+    resetMs: 60 * 60 * 1000,
+  },
+  {
+    id: 'groq_mixtral',
+    name: 'Groq mixtral-8x7b',
+    type: 'openai',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
+    model: 'mixtral-8x7b-32768',
+    envKey: 'VITE_GROQ_API_KEY',
+    resetMs: 62 * 1000,
+  }
+]
+
+const PARA_PROMPT = `THE WORLD-CLASS X POST PARAPHRASER & THREAD GENERATOR
+
+ROLE & MISSION
+You are an elite ghostwriter specializing in X (Twitter) content. Your sole mission: transform raw source material into the most engaging, shareable posts on the platform — without adding anything beyond what the source contains. You rewrite; you do not create.
+
+INPUT HANDLING
+Text provided → Use the full text as your only source.
+No embellishment — your job is to distill and reframe, not to invent.
+
+ABSOLUTE RULES
+① Paraphrase Completely — Rewrite every sentence with fresh structure, rhythm, and vocabulary. Zero verbatim copying. However: if it's not in the source, it's not in your output.
+② No Added Content — Ever. No opinions. No analysis. No predictions. No praise. No context the source didn't provide.
+③ Preserve Critical References Exactly — Never alter: @usernames, project names, token tickers ($BTC, $ETH), URLs, dates, numbers, percentages, contract addresses, technical specs.
+④ Cover Everything That Matters — Every significant fact from the source must appear.
+
+HOOK — THE MOST IMPORTANT ELEMENT
+The opening must be a scroll-stopper. Be punchy: 1–2 lines max. Never start with "I", "We", or the project name.
+Use power patterns: bold contrast, surprising number, provocative question, or a setup that demands a payoff.
+
+POST LENGTH: Write as one single post. The user has X Pro (25,000-char limit) — do NOT split.
+
+EMOJI USAGE: Max 1 emoji per paragraph. Only from this set: 📌 ❗ 🔹 🔗 🧵 💥 ✅ ➖ ‼️ 📍 🚨 🔥 ✔ 💡 ➠ 🌟 👉 ➡️
+Usage: 🚨‼️❗💥 → critical info only | 🔹➖➡️➠👉 → lists/flow | ✅✔💡🌟 → facts/insights
+
+STYLE: Tone: Sharp. Confident. Zero fluff. Language: English only.
+Never use: "In conclusion", "It's worth noting", "game-changer", "LFG", or generic hype not in source.
+
+CLOSING: End with the sharpest takeaway. Add 1–2 hashtags at the very end only.
+
+EXECUTE NOW. Source text to paraphrase:`
+
+// Stan wyczerpania modeli — tylko w pamięci (resetuje się po odświeżeniu strony)
+const _modelExhausted = {}
+const _resetCheckers  = {}
+
+function markModelExhausted(model) {
+  _modelExhausted[model.id] = Date.now()
+  // Sprawdzaj co resetMs czy limit się odnowił
+  if (_resetCheckers[model.id]) return
+  _resetCheckers[model.id] = setInterval(() => {
+    const t = _modelExhausted[model.id]
+    if (!t || Date.now() - t > model.resetMs) {
+      delete _modelExhausted[model.id]
+      clearInterval(_resetCheckers[model.id])
+      delete _resetCheckers[model.id]
+      console.log(`[AI Para] ${model.name} — limit odnowiony ✅`)
+    }
+  }, Math.min(model.resetMs, 30000))
+}
+
+function isModelAvailable(model) {
+  if (!import.meta.env[model.envKey]) return false // brak klucza
+  const t = _modelExhausted[model.id]
+  if (!t) return true
+  if (Date.now() - t > model.resetMs) {
+    delete _modelExhausted[model.id]
+    return true
+  }
+  return false
+}
+
+function getBestAvailableModel() {
+  return AI_MODELS.find(m => isModelAvailable(m)) || null
+}
+
+async function callModelApi(model, text) {
+  const key = import.meta.env[model.envKey]
+  const fullPrompt = PARA_PROMPT + '\n\n' + text
+
+  if (model.type === 'gemini') {
+    const res = await fetch(`${model.url}?key=${key}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: fullPrompt }] }] })
+    })
+    if (res.status === 429 || res.status === 503) throw new Error('RATE_LIMIT')
+    if (!res.ok) throw new Error('API_ERROR_' + res.status)
+    const data = await res.json()
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+  }
+
+  // OpenAI-compatible (Groq, Cerebras, SambaNova, OpenRouter)
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${key}`
+  }
+  if (model.id.startsWith('openrouter')) {
+    headers['HTTP-Referer'] = 'https://xpost-manager.vercel.app'
+    headers['X-Title'] = 'XPost Manager'
+  }
+  const res = await fetch(model.url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: model.model,
+      messages: [{ role: 'user', content: fullPrompt }],
+      max_tokens: 2048,
+      temperature: 0.7
+    })
+  })
+  if (res.status === 429 || res.status === 503) throw new Error('RATE_LIMIT')
+  if (!res.ok) throw new Error('API_ERROR_' + res.status)
+  const data = await res.json()
+  return data.choices?.[0]?.message?.content || ''
+}
+
+async function paraphraseWithAI(text) {
+  const anyKey = AI_MODELS.some(m => import.meta.env[m.envKey])
+  if (!anyKey) throw new Error('Brak kluczy API! Dodaj VITE_GROQ_API_KEY (lub inne) w Vercel.')
+  for (let i = 0; i < AI_MODELS.length; i++) {
+    const model = getBestAvailableModel()
+    if (!model) throw new Error('Wszystkie modele wyczerpały limity. Spróbuj za chwilę.')
+    try {
+      console.log(`[AI Para] Używam: ${model.name}`)
+      const result = await callModelApi(model, text)
+      if (result && result.trim()) return { text: result.trim(), model: model.name }
+      throw new Error('Pusta odpowiedź')
+    } catch (err) {
+      if (err.message === 'RATE_LIMIT') {
+        console.warn(`[AI Para] ${model.name} — limit wyczerpany, przełączam...`)
+        markModelExhausted(model)
+      } else {
+        console.error(`[AI Para] ${model.name} — błąd: ${err.message}`)
+        markModelExhausted(model) // tymczasowo blokuj przy błędzie też
+      }
+    }
+  }
+  throw new Error('Nie udało się wygenerować parafrazy.')
+}
+
+async function triggerAIPara(postId, btn) {
+  const ta        = document.getElementById('para-' + postId)
+  const modelInfo = document.getElementById('para-model-' + postId)
+  if (!ta) return
+
+  const post = posts[postId]
+  const sourceText = post?.text
+  if (!sourceText || sourceText.trim().length < 10) {
+    toast('Brak tekstu oryginalnego!')
+    return
+  }
+
+  btn.disabled = true
+  btn.textContent = '⏳ Generuję...'
+  if (modelInfo) modelInfo.textContent = 'Łączę z modelem AI...'
+
+  try {
+    const result = await paraphraseWithAI(sourceText)
+    // Wstaw do textarea
+    ta.value = result.text
+    if (modelInfo) modelInfo.textContent = `✅ ${result.model}`
+    // Zapisz do Firebase — dokładnie tak samo jak savePara()
+    if (posts[postId]) posts[postId].para = result.text
+    await updateDoc(doc(db, 'posts', postId), { para: result.text })
+    toast('Parafraza wygenerowana i zapisana ✓')
+  } catch (err) {
+    if (modelInfo) modelInfo.textContent = `❌ ${err.message}`
+    toast('Błąd AI: ' + err.message)
+  } finally {
+    btn.disabled = false
+    btn.textContent = '✨ AI'
+  }
+}
+// ── KONIEC: AI PARAFRAZA ──────────────────────────────────────────
+
 // ── STATE ─────────────────────────────────────────────────────────
 let posts      = {}
 let myPosts    = {}
@@ -335,7 +566,11 @@ function renderMain() {
           <div class="orig-text" id="orig-${p.id}">${p.text}</div>
         </div>
         <div class="col-para">
-          <div class="col-label">Twoja parafraza</div>
+          <div class="col-label" style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+            <span>Twoja parafraza</span>
+            <button class="btn-ai-para" onclick="triggerAIPara('${p.id}',this)" title="Generuj parafrazę przez AI">✨ AI</button>
+          </div>
+          <div class="ai-para-info" id="para-model-${p.id}"></div>
           <textarea class="para-area" id="para-${p.id}"
             placeholder="Wklej tutaj swoją parafrazę..."
             onblur="savePara('${p.id}',this.value)">${p.para||''}</textarea>
@@ -1620,6 +1855,7 @@ Object.assign(window, {
   renderTgSygnaly, renderTgWpisy, setTgStatus, saveTgPara, saveTgNote, toggleTgExpand,
   renderKonta, toggleKatForm, addKategoria, startKatEdit, cancelKatEdit, saveKatEdit, deleteKategoria,
   addAccount, startAccEdit, cancelAccEdit, saveAccEdit, deleteAccount,
+  triggerAIPara,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
