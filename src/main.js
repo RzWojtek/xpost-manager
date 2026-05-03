@@ -325,6 +325,7 @@ let fAccount = ''
 let fStatus  = ''
 let fSearch  = ''
 let fExclude = ''
+let fExcludeMode = 'any'  // 'any' = LUB (którekolwiek słowo), 'all' = I (wszystkie słowa)
 let fType    = ''
 
 // TG filter state
@@ -568,6 +569,8 @@ function renderMain() {
   if (selTy)  fType    = selTy.value
   if (inpSr)  fSearch  = inpSr.value.toLowerCase()
   if (inpEx)  fExclude = inpEx.value.toLowerCase()
+  const selExMode = document.getElementById('f-exclude-mode')
+  if (selExMode) fExcludeMode = selExMode.value
 
   const list = Object.values(posts).filter(p => {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
@@ -581,7 +584,10 @@ function renderMain() {
     if (fExclude) {
       const txt = p.text.toLowerCase()
       const words = fExclude.split(/\s+/).filter(Boolean)
-      if (words.every(w => txt.includes(w))) return false
+      const match = fExcludeMode === 'any'
+        ? words.some(w => txt.includes(w))   // LUB — ukryj jeśli ma którekolwiek
+        : words.every(w => txt.includes(w))  // I   — ukryj jeśli ma wszystkie
+      if (match) return false
     }
     return true
   }).sort((a,b) => (b.xDate||b.addedAt).localeCompare(a.xDate||a.addedAt))
@@ -1516,7 +1522,11 @@ function buildApp() {
           <option value="rt">Tylko RT</option>
         </select>
         <input id="f-search" placeholder="Szukaj w treści..." oninput="renderMain()" style="flex:1;min-width:140px">
-        <input id="f-exclude" placeholder="🚫 Wyklucz słowa..." oninput="renderMain()" style="flex:1;min-width:140px" title="Wpisz słowa oddzielone spacją — ukryje wpisy zawierające WSZYSTKIE te słowa">
+        <input id="f-exclude" placeholder="🚫 Wyklucz słowa..." oninput="renderMain()" style="flex:1;min-width:140px">
+        <select id="f-exclude-mode" onchange="renderMain()" title="Tryb wykluczania słów">
+          <option value="any">LUB</option>
+          <option value="all">I</option>
+        </select>
       </div>
       <div id="main-cards"><div class="loading">Ładowanie...</div></div>
     </div>
