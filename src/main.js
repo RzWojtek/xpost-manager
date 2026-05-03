@@ -324,6 +324,7 @@ let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','�
 let fAccount = ''
 let fStatus  = ''
 let fSearch  = ''
+let fExclude = ''
 let fType    = ''
 
 // TG filter state
@@ -561,10 +562,12 @@ function renderMain() {
   const selSt  = document.getElementById('f-status')
   const selTy  = document.getElementById('f-type')
   const inpSr  = document.getElementById('f-search')
+  const inpEx  = document.getElementById('f-exclude')
   if (selAcc) fAccount = selAcc.value
   if (selSt)  fStatus  = selSt.value
   if (selTy)  fType    = selTy.value
   if (inpSr)  fSearch  = inpSr.value.toLowerCase()
+  if (inpEx)  fExclude = inpEx.value.toLowerCase()
 
   const list = Object.values(posts).filter(p => {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
@@ -575,6 +578,11 @@ function renderMain() {
     if (fType === 'rt'   && !isRT)  return false
     if (fType === 'post' &&  isRT)  return false
     if (fSearch  && !p.text.toLowerCase().includes(fSearch)) return false
+    if (fExclude) {
+      const txt = p.text.toLowerCase()
+      const words = fExclude.split(/\s+/).filter(Boolean)
+      if (words.every(w => txt.includes(w))) return false
+    }
     return true
   }).sort((a,b) => (b.xDate||b.addedAt).localeCompare(a.xDate||a.addedAt))
 
@@ -1508,6 +1516,7 @@ function buildApp() {
           <option value="rt">Tylko RT</option>
         </select>
         <input id="f-search" placeholder="Szukaj w treści..." oninput="renderMain()" style="flex:1;min-width:140px">
+        <input id="f-exclude" placeholder="🚫 Wyklucz słowa..." oninput="renderMain()" style="flex:1;min-width:140px" title="Wpisz słowa oddzielone spacją — ukryje wpisy zawierające WSZYSTKIE te słowa">
       </div>
       <div id="main-cards"><div class="loading">Ładowanie...</div></div>
     </div>
