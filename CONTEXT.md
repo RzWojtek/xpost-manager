@@ -1,5 +1,5 @@
 # CONTEXT.md — XPost Manager + XParafBot + TGBot
-> Plik kontekstowy dla kolejnych sesji AI. Ostatnia aktualizacja: Kwiecień 2026.
+> Plik kontekstowy dla kolejnych sesji AI. Ostatnia aktualizacja: Maj 2026.
 
 ---
 
@@ -11,7 +11,7 @@ Zintegrowany system do zarządzania treścią na platformie X (Twitter) i Telegr
 2. **TGBot** — bot Python na VPS, monitoruje publiczne kanały Telegram przez Telethon, zapisuje do Firebase
 3. **XPost Manager** — webowa aplikacja (Vite + vanilla JS, Vercel), zarządza wszystkimi wpisami, podłączona do Firebase i Google Sheets
 
-**Cel użytkownika:** Agregować treści z X i Telegrama, parafrazować je, publikować na własnym koncie X. Zarządzać kontami, linkami ref, notatkami i sygnałami tradingowymi z Telegrama.
+**Cel użytkownika:** Agregować treści z X i Telegrama, parafrazować je (ręcznie lub przez AI), publikować na własnym koncie X. Zarządzać kontami, linkami ref, notatkami i sygnałami tradingowymi z Telegrama.
 
 ---
 
@@ -96,7 +96,7 @@ xpost-manager/
 
 | Kolekcja | Źródło danych | Opis |
 |---|---|---|
-| `posts` | Google Sheets (sync co 5 min) | Wpisy z X/bota |
+| `posts` | Google Sheets (sync co 5 min) + ręczne dodawanie | Wpisy z X/bota + posty ręczne |
 | `myPosts` | Użytkownik | Własne wpisy do publikacji |
 | `refLinks` | Użytkownik | Linki referencyjne do projektów |
 | `notes` | Użytkownik | Notatki tekstowe |
@@ -108,7 +108,7 @@ xpost-manager/
 ### Struktura dokumentu `posts`
 ```json
 {
-  "id": "string (ID posta X)",
+  "id": "string (ID posta X lub 'manual_' + uid)",
   "account": "string (@nick lub 'nick RT @autor')",
   "xDate": "string (data posta na X)",
   "xLink": "string (URL do X)",
@@ -116,12 +116,15 @@ xpost-manager/
   "links": ["array URL"],
   "imgs": ["array URL Cloudinary/X"],
   "isRT": "boolean",
-  "para": "string (parafraza użytkownika)",
+  "para": "string (parafraza użytkownika lub wygenerowana przez AI)",
   "note": "string (notatka użytkownika)",
   "status": "Nowy|Do zrobienia|W toku|Opublikowane|Odrzucone",
-  "addedAt": "string (data dodania do Firebase)"
+  "addedAt": "string (data dodania do Firebase)",
+  "manualEntry": "boolean (true tylko dla postów dodanych ręcznie — pole opcjonalne)"
 }
 ```
+> Posty z `manualEntry: true` mają ID w formacie `manual_abc123xyz` i wyświetlają
+> zielony badge "✍ Ręczny" w zakładce Wpisy.
 
 ### Struktura dokumentu `tgSignals` / `tgWpisy`
 ```json
@@ -160,25 +163,38 @@ xpost-manager/
 
 ## 5. ZAKŁADKI APLIKACJI (UI)
 
+### Główny pasek zakładek (7 zakładek)
+
 | Zakładka | ID strony | Funkcja render | Dane z |
 |---|---|---|---|
 | Wpisy | `page-main` | `renderMain()` | Firestore `posts` |
 | Moje wpisy | `page-moje` | `renderMoje()` | Firestore `myPosts` |
-| Archiwum | `page-archiwum` | `renderArchive()` | Firestore `posts` (status=Opublikowane) |
 | Notatki | `page-notatki` | `renderNotes()` | Firestore `notes` |
 | Linki ref | `page-ref` | `renderRef()` | Firestore `refLinks` |
 | 👤 Konta | `page-konta` | `renderKonta()` | Firestore `konta` |
-| 📡 TG Sygnały | `page-tgsygnaly` | `renderTgSygnaly()` | Firestore `tgSignals` |
-| 📋 TG Wpisy | `page-tgwpisy` | `renderTgWpisy()` | Firestore `tgWpisy` |
-| Kalendarz | `page-kalendarz` | `renderKalendarz()` | Firestore `posts` + `myPosts` |
+| ✍ Dodaj ręcznie | `page-manual` | `toggleManualForm()` / `addManualPost()` | Firestore `posts` |
+| Więcej ▾ | `page-wiecej` | `switchSubTab()` | — |
+
+### Zakładka "Więcej ▾" — 4 podzakładki
+
+| Podzakładka | ID substrony | Funkcja render | Dane z |
+|---|---|---|---|
+| Archiwum | `sub-archiwum` | `renderArchive()` | Firestore `posts` (status=Opublikowane) |
+| 📡 TG Sygnały | `sub-tgsygnaly` | `renderTgSygnaly()` | Firestore `tgSignals` |
+| 📋 TG Wpisy | `sub-tgwpisy` | `renderTgWpisy()` | Firestore `tgWpisy` |
+| Kalendarz | `sub-kalendarz` | `renderKalendarz()` | Firestore `posts` + `myPosts` |
+
+> Podzakładki: klasa `.subtab` / `.subpage`, atrybut `data-subtab`, przełączane przez `switchSubTab(name)`.
+> Badge na "Więcej" = suma nowych TG Sygnałów + TG Wpisów.
 
 ### Cechy wspólne kart (Wpisy, TG Sygnały, TG Wpisy)
 - Pole **Oryginał** (div) + pole **Parafraza** (textarea, zapis onblur)
+- Przycisk **✨ AI** — generuje parafrazę przez AI (system rotacji modeli), zapisuje do Firebase
 - Pole **Notatka** (input inline, zapis onblur) — klasa `note-inline`, `card-note`
 - Select statusu (zmiana natychmiastowa → Firebase)
 - Przycisk "Odrzuć" → status Odrzucone → znika z widoku
-- Opublikowane → przenosi do Archiwum
-- Filtry: konto/kanał, status, typ, szukaj w treści
+- Opublikowane → przenosi do Archiwum (podzakładka w "Więcej")
+- Filtry: konto/kanał, status, typ, szukaj w treści, wyklucz słowa (LUB/I)
 
 ---
 
@@ -202,6 +218,10 @@ Użytkownik
     ↓ XPost Manager (Vercel)
     ↓ Google Auth (signInWithPopup)
 Firebase Firestore (myPosts, notes, refLinks, konta, emojis)
+
+Użytkownik (ręczne dodawanie)
+    ↓ Zakładka "✍ Dodaj ręcznie"
+Firebase Firestore posts (manualEntry: true)
 ```
 
 ### Sheets → Firebase sync (syncSheets)
@@ -212,12 +232,47 @@ Firebase Firestore (myPosts, notes, refLinks, konta, emojis)
 - Nowe wpisy dostają status `Nowy`
 
 ### Sortowanie
-- Zakładka Wpisy: po `xDate` (data posta X) malejąco
-- Zakładka TG: po `addedAt` malejąco
+- Zakładka **Wpisy**: po `xDate` (data posta X) malejąco
+- Zakładka **Moje wpisy**: nieopublikowane na górze (po `created` malejąco), opublikowane na dole (po `created` malejąco)
+- Zakładka **Notatki**: po `created` malejąco — używa `parseDateStr()` bo format daty może być PL (`dd.mm.yyyy`) lub ISO
+- Zakładka **TG**: po `addedAt` malejąco
 
 ---
 
-## 7. KONFIGURACJA BOTÓW
+## 7. AI PARAFRAZA — SYSTEM ROTACJI MODELI
+
+Każdy wpis w zakładce Wpisy ma przycisk **✨ AI** generujący parafrazę.
+
+### Kolejność modeli (fallback od góry)
+| # | Model | Zmienna env | Reset limitu |
+|---|---|---|---|
+| 1 | Groq llama-3.3-70b-versatile | `VITE_GROQ_API_KEY` | ~62 sek |
+| 2 | Gemini 2.0 Flash | `VITE_GEMINI_API_KEY` | ~62 sek |
+| 3 | Cerebras llama3.1-8b | `VITE_CEREBRAS_API_KEY` | ~60 min |
+| 4 | SambaNova Meta-Llama-3.1-70B | `VITE_SAMBANOVA_API_KEY` | ~60 min |
+| 5 | OpenRouter DeepSeek-R1 free | `VITE_OPENROUTER_API_KEY` | ~60 min |
+| 6 | OpenRouter Llama-3.3-70b free | `VITE_OPENROUTER_API_KEY` | ~60 min |
+| 7 | Groq mixtral-8x7b-32768 | `VITE_GROQ_API_KEY` | ~62 sek |
+
+### Zasady działania
+- Błąd 429/503 → model oznaczany jako wyczerpany (`_modelExhausted`), przejście do następnego
+- Stan wyczerpania trzymany w pamięci — resetuje się przy odświeżeniu strony
+- Brak klucza VITE_* → model automatycznie pomijany
+- Wynik zapisuje się do `posts/{id}.para` w Firebase natychmiast po wygenerowaniu
+- Pod przyciskiem wyświetla się nazwa użytego modelu (`✅ Groq llama-3.3-70b`) lub błąd
+- Parametry API: `max_tokens: 2048`, `temperature: 0.7`
+
+### Prompt (PARA_PROMPT)
+Pełny prompt "THE WORLD-CLASS X POST PARAPHRASER & THREAD GENERATOR" z zasadami:
+- Parafraza kompletna (zero verbatim), zachowanie tickers/URL/dat
+- Domyślnie jeden długi post (X Pro, limit 25 000 znaków)
+- Maks. 1 emoji na sekcję, tylko z zatwierdzonego zestawu
+- Każda sekcja oddzielona pustą linią, `🔗` przed każdym URL
+- Hashtagi na osobnej linii po pustej linii na końcu
+
+---
+
+## 8. KONFIGURACJA BOTÓW
 
 ### tg_sygnaly.txt — format
 ```
@@ -243,47 +298,68 @@ G=Zrobione (checkbox) | H=Zdjęcia (Cloudinary URL) | I=Typ (Post/RT)
 
 ---
 
-## 8. CO ZOSTAŁO ZROBIONE W TEJ SESJI
+## 9. HISTORIA ZMIAN
 
+### Sesja — wcześniej (TGBot + zakładki TG)
 1. ✅ **TGBot v1.0** — nowy bot Python do monitorowania Telegrama
-   - `tgbot.py` — główny bot (Telethon + firebase-admin)
-   - `login_tg.py` — jednorazowe logowanie
-   - Obsługa kanałów po nazwie i numerycznym ID (z `-100` prefixem)
-   - Filtrowanie po słowach kluczowych (tgSignals) i bez filtrów (tgWpisy)
-   - CRON co 30 minut
-
-2. ✅ **Zakładki TG Sygnały i TG Wpisy** w XPost Manager
-   - Pełna funkcjonalność jak zakładka Wpisy
-   - Badge'e: żółte (sygnały) i fioletowe (wpisy)
-   - Auto-refresh co 2 minuty
-
-3. ✅ **Naprawa sortowania** — zakładka Wpisy sortuje po `xDate` (nie `addedAt`)
-
+2. ✅ **Zakładki TG Sygnały i TG Wpisy** w XPost Manager (badge'e żółte i fioletowe, auto-refresh co 2 min)
+3. ✅ **Naprawa sortowania Wpisy** — po `xDate` (nie `addedAt`)
 4. ✅ **Pole Notatka** w zakładkach: Wpisy, Moje wpisy, TG Sygnały, TG Wpisy
-   - Input inline, zapis `onblur` do Firebase
-
 5. ✅ **Notatka w Linki ref** — pole notatki w edycji linku
+6. ✅ **Zakładka Konta** — kategorie kont z kopiowaniem jednym kliknięciem, Firebase `konta`
+7. ✅ **Naprawa bug TG** — `setTgStatus`/`saveTgPara`/`saveTgNote` używały `p.id` zamiast `docId`
 
-6. ✅ **Zakładka Konta** — nowa zakładka do zarządzania kontami
-   - Kategorie (Twitter, Telegram, Email, itp.) z ikoną emoji i notatką
-   - Konta w kategoriach — kopiowanie jednym kliknięciem (zielony przycisk)
-   - Edycja inline kategorii i kont
-   - Firebase kolekcja `konta`
+### Sesja 03.05.2026 — AI Parafraza + Filtr wykluczeń
+8. ✅ **AI Parafraza (✨ AI)** w zakładce Wpisy
+   - Przycisk przy każdym wpisie, system rotacji 7 modeli z auto-fallback
+   - Zapis do `posts/{id}.para` natychmiast po wygenerowaniu
+   - Wyświetla nazwę użytego modelu lub komunikat błędu
+   - Klucze API jako VITE_* w Vercel, brak klucza = model pomijany
+   - Nowe klasy CSS: `.btn-ai-para`, `.ai-para-info`
 
-7. ✅ **Naprawa bug TG** — `setTgStatus`/`saveTgPara`/`saveTgNote` używały `p.id`
-   zamiast klucza dokumentu Firestore (`docId`) — Odrzucone nie działało
+9. ✅ **Filtr wykluczeń** w zakładce Wpisy
+   - Pole "🚫 Wyklucz słowa..." — wiele słów oddzielonych spacją, działa live
+   - Przełącznik **LUB** (ukryj jeśli ma którekolwiek słowo) / **I** (ukryj jeśli ma wszystkie)
+   - Zmienne stanu: `fExclude`, `fExcludeMode` ('any' | 'all')
+
+### Sesja Maj 2026 — Refaktoryzacja UI + naprawki
+10. ✅ **Refaktoryzacja zakładek** — skrócenie paska z 9 do 7 zakładek
+    - Archiwum, TG Sygnały, TG Wpisy, Kalendarz → mega-zakładka **Więcej ▾** z podzakładkami
+    - Nowe klasy CSS: `.subnav`, `.subtab`, `.subpage`
+    - Nowa funkcja `switchSubTab(name)`
+
+11. ✅ **Zakładka "✍ Dodaj ręcznie"** — ręczne dodanie posta do zakładki Wpisy
+    - Formularz: treść, konto/źródło, data, link, notatka
+    - Zapisuje do `posts` z `manualEntry: true`, ID = `manual_` + uid()
+    - Zielony badge "✍ Ręczny" w zakładce Wpisy
+    - Funkcje: `toggleManualForm()`, `addManualPost()`
+
+12. ✅ **Naprawa sortowania Moje wpisy** — nieopublikowane na górze, opublikowane na dole
+
+13. ✅ **Naprawa sortowania Notatki** — helper `parseDateStr()` obsługuje format PL i ISO
+
+14. ✅ **Naprawa Kalendarza** — korzeń: `archivedAt` w formacie PL (`dd.mm.yyyy`)
+    - Heatmapa była pusta (klucze `byDate` w formacie PL, heatmapa szukała ISO)
+    - "Aktywność miesięczna" wyświetlała "undefined" (`split('-')` nie działał na formacie PL)
+    - Naprawka: `parseDateStr()` przy budowaniu listy published
+    - Heatmapa rozszerzona z 4 do 8 tygodni, wyrównana do poniedziałku
+    - Aktywność miesięczna: 12 miesięcy (było 6), czytelny format "Kwi 2026" (było "2026-04")
+    - Usunięto sekcję "Top źródła wpisów"
 
 ---
 
-## 9. AKTUALNY STAN
+## 10. AKTUALNY STAN
 
 ### Działa ✅
 - XParafBot — scraping X → Sheets → Firebase
-- XPost Manager — wszystkie 9 zakładek
+- XPost Manager — wszystkie zakładki (7 głównych + 4 podzakładki w "Więcej")
 - Sync Sheets → Firebase (co 5 min)
 - TGBot — instalacja, sesja, zapis do Firebase
-- Kanały TG z nazwą (`@kanal`) działają poprawnie
-- Kanały TG z ID (`-100XXXXXXXXX`) — działają jeśli konto jest członkiem
+- Kanały TG z nazwą (`@kanal`) i ID (`-100XXXXXXXXX`)
+- AI Parafraza z rotacją 7 modeli
+- Filtr wykluczeń (LUB/I)
+- Dodawanie postów ręcznie
+- Kalendarz (heatmapa, miesięczna aktywność, historia publikacji)
 
 ### Wymaga uwagi ⚠️
 - **Sesja TGBot** — zalogowana na innym numerze niż docelowy.
@@ -292,29 +368,33 @@ G=Zrobione (checkbox) | H=Zdjęcia (Cloudinary URL) | I=Typ (Post/RT)
 - **Cookies XParafBot** — ważność sprawdzana automatycznie, ostrzeżenie na Telegram < 5 dni
 
 ### Nie zaimplementowano ❌
-- Parafraza AI (Groq) — wyłączona celowo (niska jakość)
-- Archiwum dla TG Sygnałów i TG Wpisów (Opublikowane znikają z widoku ale nie ma dedykowanej zakładki archiwum TG)
+- Archiwum dla TG Sygnałów i TG Wpisów (Opublikowane znikają z widoku, brak dedykowanej zakładki archiwum TG)
 
 ---
 
-## 10. KONWENCJE
+## 11. KONWENCJE KODU
 
-### Kod JS (main.js)
+### JS (main.js)
 - Vanilla JS, bez frameworka, bez TypeScript
 - State globalny: `posts`, `myPosts`, `refLinks`, `notes`, `tgSignals`, `tgWpisy`, `konta`
-- Renderowanie przez innerHTML (nie virtual DOM)
+- Renderowanie przez `innerHTML` (nie virtual DOM)
 - Firestore: `setDoc` dla nowych/nadpisania, `updateDoc` dla częściowych zmian
 - ID dokumentów TG: `tgs_{kanal}_{msgId}` (sygnały), `tgw_{kanal}_{msgId}` (wpisy)
+- ID postów ręcznych: `manual_` + uid()
 - Kopiowanie: `navigator.clipboard.writeText` (czysty tekst, bez HTML)
 - Filtry: odczyt z DOM w funkcji render (nie osobne zmienne)
 - **NIGDY** nie używać `getRedirectResult` — tylko `signInWithPopup`
 - Sortowanie kart TG: `Object.entries()` (nie `values()`!) żeby mieć `docId`
+- **Daty:** `nowStr()` zapisuje format PL `dd.mm.yyyy hh:mm:ss`. Do porównań i dat kalendarza używaj `parseDateStr(s)` — obsługuje oba formaty (PL i ISO → zwraca `YYYY-MM-DD`)
+- **Podzakładki:** `.subtab` / `.subpage`, `data-subtab`, przełączane przez `switchSubTab(name)`, kontenery `id="sub-{name}"`
 
 ### CSS
 - CSS variables: `--neon:#00e5ff`, `--bg:#484862`, `--bg2:#54546f`, `--bg3:#60607e`
-- Klasy: `card`, `card-head`, `card-body`, `card-foot`, `card-note`
+- Klasy kart: `card`, `card-head`, `card-body`, `card-foot`, `card-note`
 - Badge TG Sygnały: żółty (`#f59e0b`), TG Wpisy: fioletowy (`#a78bfa`)
-- Badge Konta: zielony (`#10b981`)
+- Badge Konta: zielony (`#10b981`), Badge Ręczny: zielony (`#10b981`)
+- AI: `.btn-ai-para` (gradient fiolet→cyan), `.ai-para-info` (info o modelu)
+- Subnav: `.subnav`, `.subtab`, `.subpage`
 
 ### Deployment
 - **Zawsze edytuj istniejące pliki** — nie pisz od nowa
@@ -331,7 +411,7 @@ G=Zrobione (checkbox) | H=Zdjęcia (Cloudinary URL) | I=Typ (Post/RT)
 
 ---
 
-## 11. PRZYDATNE KOMENDY VPS
+## 12. PRZYDATNE KOMENDY VPS
 
 ```bash
 # XParafBot
@@ -361,7 +441,7 @@ python3 -c "import firebase_admin; print('OK')"
 
 ---
 
-## 12. ZMIENNE ŚRODOWISKOWE
+## 13. ZMIENNE ŚRODOWISKOWE
 
 ### `/root/xparafbot/.env`
 ```
@@ -395,6 +475,11 @@ VITE_FIREBASE_APP_ID
 VITE_SHEET_ID
 VITE_SHEET_TAB
 VITE_SHEETS_API_KEY
+VITE_GROQ_API_KEY             ← AI Parafraza (modele 1 i 7)
+VITE_GEMINI_API_KEY           ← AI Parafraza (model 2)
+VITE_CEREBRAS_API_KEY         ← AI Parafraza (model 3)
+VITE_SAMBANOVA_API_KEY        ← AI Parafraza (model 4)
+VITE_OPENROUTER_API_KEY       ← AI Parafraza (modele 5 i 6)
 ```
 
 ---
@@ -414,7 +499,14 @@ SYSTEM SKŁADA SIĘ Z 3 KOMPONENTÓW:
 
 2. TGBot (Python, /root/tgbot/) — monitoruje publiczne kanały Telegram przez Telethon (konto osobiste, NIE bot), zapisuje do Firebase. CRON co 30 min. api_id=21596975. Kanały numeryczne wymagają prefixu -100.
 
-3. XPost Manager (Vite + vanilla JS, Vercel, Firebase projekt: xpost-manager) — webowa aplikacja, 9 zakładek: Wpisy, Moje wpisy, Archiwum, Notatki, Linki ref, Konta, TG Sygnały, TG Wpisy, Kalendarz.
+3. XPost Manager (Vite + vanilla JS, Vercel, Firebase projekt: xpost-manager) — webowa aplikacja.
+
+STRUKTURA ZAKŁADEK (7 głównych):
+Wpisy | Moje wpisy | Notatki | Linki ref | Konta | ✍ Dodaj ręcznie | Więcej ▾
+
+ZAKŁADKA "WIĘCEJ" ma 4 podzakładki:
+Archiwum | TG Sygnały | TG Wpisy | Kalendarz
+Podzakładki: ID="sub-{name}", klasa .subpage, przełączane przez switchSubTab(name)
 
 FIREBASE KOLEKCJE: posts, myPosts, refLinks, notes, emojis, tgSignals, tgWpisy, konta.
 
@@ -422,11 +514,15 @@ KLUCZOWE ZASADY KODU:
 - Auth: signInWithPopup TYLKO (nigdy getRedirectResult)
 - TG karty: renderować przez Object.entries() (nie values()) — klucz dokumentu to docId np. tgs_kanal_123, NIE p.id
 - Sortowanie Wpisy: po xDate malejąco
+- Sortowanie Moje wpisy: nieopublikowane na górze, opublikowane na dole
+- Sortowanie Notatki: używaj parseDateStr() — daty mogą być w formacie PL (dd.mm.yyyy) lub ISO
 - Kopiowanie: navigator.clipboard.writeText (czysty tekst)
 - Filtry: odczyt z DOM w funkcji render
 - Dark neon theme: --neon:#00e5ff, --bg:#484862
 - Deploy: push GitHub → Vercel auto-deploy
 - VPS upload: WinSCP
+- Posty ręczne: ID zaczyna się od "manual_", pole manualEntry:true, badge "✍ Ręczny" w Wpisach
+- AI Parafraza: system rotacji 7 modeli (Groq→Gemini→Cerebras→SambaNova→OpenRouter×2→Groq), klucze VITE_* w Vercel
 
 STAN: TGBot wymaga ponownego logowania (rm tgbot_session.session && python3 login_tg.py) na właściwym numerze telefonu (tym który należy do monitorowanych kanałów).
 ```
