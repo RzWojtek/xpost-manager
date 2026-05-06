@@ -338,6 +338,18 @@ let tgWpisSearch = ''
 
 // ── UTILS ─────────────────────────────────────────────────────────
 const nowStr = () => new Date().toLocaleString('pl-PL',{hour12:false}).replace(',','')
+// ISO timestamp do sortowania i porównań dat (YYYY-MM-DD HH:MM:SS)
+const nowISO = () => new Date().toISOString().slice(0,19).replace('T',' ')
+// Konwertuje datę PL ("30.03.2026 00:28:51") lub ISO na YYYY-MM-DD do porównań
+function parseDateStr(s) {
+  if (!s) return ''
+  // Format ISO: zaczyna się od cyfry 4-cyfrowego roku
+  if (/^\d{4}-/.test(s)) return s.slice(0,10)
+  // Format PL: DD.MM.YYYY ...
+  const m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/)
+  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`
+  return s.slice(0,10)
+}
 const uid    = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6)
 
 let toastTimer
@@ -1028,7 +1040,12 @@ async function restorePost(id) {
 
 // ── RENDER: NOTES ─────────────────────────────────────────────────
 function renderNotes() {
-  const list = Object.values(notes).sort((a,b)=>b.created.localeCompare(a.created))
+  const list = Object.values(notes).sort((a,b)=>{
+    // Obsługa obu formatów: PL (dd.mm.yyyy) i ISO (yyyy-mm-dd)
+    const da = parseDateStr(a.created) + (a.created||'').slice(10)
+    const db2 = parseDateStr(b.created) + (b.created||'').slice(10)
+    return db2.localeCompare(da)
+  })
   const el = document.getElementById('notes-cards')
   if(!el) return
   if(!list.length){el.innerHTML='<div class="empty">Brak notatek.</div>';return}
@@ -1855,14 +1872,16 @@ function renderKalendarz() {
 
   Object.values(posts).forEach(p => {
     if (p.status === 'Opublikowane') {
-      const dateStr = (p.archivedAt || p.xDate || '').slice(0, 10)
+      const raw = p.archivedAt || p.xDate || ''
+      const dateStr = parseDateStr(raw)
       if (dateStr) published.push({ date: dateStr, source: 'wpisy', text: p.text, account: '@' + p.account, xLink: p.xLink || '', para: p.para || '' })
     }
   })
 
   Object.values(myPosts).forEach(p => {
     if (p.status === 'Opublikowane') {
-      const dateStr = (p.published || p.created || '').slice(0, 10)
+      const raw = p.published || p.created || ''
+      const dateStr = parseDateStr(raw)
       if (dateStr) published.push({ date: dateStr, source: 'moje', text: p.text, account: 'Mój wpis', xLink: '', para: '', tags: p.tags || '' })
     }
   })
