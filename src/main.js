@@ -527,9 +527,27 @@ async function syncSheets() {
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
-  document.querySelector(`.tab[data-tab="${name}"]`).classList.add('active')
-  document.getElementById(`page-${name}`).classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, archiwum:renderArchive, notatki:renderNotes, ref:renderRef, kalendarz:renderKalendarz, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, konta:renderKonta}
+  const tabEl = document.querySelector(`.tab[data-tab="${name}"]`)
+  const pageEl = document.getElementById(`page-${name}`)
+  if (tabEl)  tabEl.classList.add('active')
+  if (pageEl) pageEl.classList.add('active')
+  const fn = {main:renderMain, moje:renderMoje, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}}
+  if (fn[name]) fn[name]()
+  // Wiecej — renderuj aktywną podzakładkę
+  if (name === 'wiecej') {
+    const activeSubtab = document.querySelector('.subtab.active')?.dataset.subtab || 'archiwum'
+    switchSubTab(activeSubtab)
+  }
+}
+
+function switchSubTab(name) {
+  document.querySelectorAll('.subtab').forEach(t => t.classList.remove('active'))
+  document.querySelectorAll('.subpage').forEach(p => p.classList.remove('active'))
+  const tabEl  = document.querySelector(`.subtab[data-subtab="${name}"]`)
+  const pageEl = document.getElementById(`sub-${name}`)
+  if (tabEl)  tabEl.classList.add('active')
+  if (pageEl) pageEl.classList.add('active')
+  const fn = {archiwum:renderArchive, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, kalendarz:renderKalendarz}
   if (fn[name]) fn[name]()
 }
 
@@ -633,6 +651,7 @@ function renderMain() {
       <div class="card-head">
         <span class="account">@${p.account}</span>
         ${(p.isRT || (p.account&&p.account.includes(' RT @'))) ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
+        ${p.manualEntry ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.3);font-weight:700">✍ Ręczny</span>' : ''}
         <a class="xlink" href="${p.xLink||'#'}" target="_blank">Otwórz na X ↗</a>
         <span class="post-date">📅 ${p.xDate}</span>
         <select class="status-sel" style="${statusStyle(p.status)}" onchange="setPostStatus('${p.id}',this.value)">
@@ -671,6 +690,45 @@ function renderMain() {
       </div>
     </div>`
   }).join('')
+}
+
+// ── DODAJ RĘCZNIE ────────────────────────────────────────────────
+function toggleManualForm(show) {
+  const f = document.getElementById('manual-form')
+  const b = document.getElementById('btn-add-manual')
+  if (!f || !b) return
+  if (show === undefined) show = f.style.display === 'none'
+  f.style.display = show ? 'block' : 'none'
+  b.textContent   = show ? '✕ Zamknij' : '+ Dodaj post ręcznie'
+  if (show) {
+    const fields = ['manual-text','manual-link','manual-account','manual-note']
+    fields.forEach(id => { const el=document.getElementById(id); if(el) el.value='' })
+    const d = document.getElementById('manual-date')
+    if (d) d.value = new Date().toISOString().slice(0,16)
+  }
+}
+
+async function addManualPost() {
+  const text    = document.getElementById('manual-text')?.value.trim()
+  const link    = document.getElementById('manual-link')?.value.trim() || ''
+  const account = document.getElementById('manual-account')?.value.trim() || 'ręczny'
+  const note    = document.getElementById('manual-note')?.value.trim() || ''
+  const dateVal = document.getElementById('manual-date')?.value || ''
+  if (!text) { toast('Wpisz treść posta!'); return }
+  const id  = 'manual_' + uid()
+  const now = nowStr()
+  const xDate = dateVal ? dateVal.replace('T', ' ') : now
+  const post = {
+    id, account, xDate, xLink: link, text,
+    links: [], imgs: [], isRT: false,
+    para: '', note, status: 'Nowy',
+    addedAt: now, manualEntry: true
+  }
+  await setDoc(doc(db, 'posts', id), post)
+  posts[id] = post
+  toggleManualForm(false)
+  renderMain(); updateStats(); updateBadges()
+  toast('Post dodany ✓')
 }
 
 // ── POST ACTIONS ──────────────────────────────────────────────────
@@ -745,13 +803,22 @@ function updateBadges() {
   s('tab-konta-badge',  Object.values(konta).reduce((sum,k)=>(k.accounts||[]).length+sum, 0))
   s('tab-tgsig-badge',  Object.values(tgSignals).filter(p=>p.status==='Nowy').length)
   s('tab-tgwpisy-badge',Object.values(tgWpisy).filter(p=>p.status==='Nowy').length)
+  // Badge "Więcej" = suma nowych TG sygnałów + TG wpisów
+  const wiecejCount = Object.values(tgSignals).filter(p=>p.status==='Nowy').length + Object.values(tgWpisy).filter(p=>p.status==='Nowy').length
+  s('tab-wiecej-badge', wiecejCount || '')
 }
 
 // ── RENDER: MY POSTS ──────────────────────────────────────────────
 function renderMoje() {
   const el   = document.getElementById('moje-cards')
   if (!el) return
-  const list = Object.values(myPosts).sort((a,b)=>b.created.localeCompare(a.created))
+  // Nieopublikowane na górze (sort po dacie), opublikowane na dole (sort po dacie)
+  const list = Object.values(myPosts).sort((a,b) => {
+    const aPub = a.status === 'Opublikowane' ? 1 : 0
+    const bPub = b.status === 'Opublikowane' ? 1 : 0
+    if (aPub !== bPub) return aPub - bPub
+    return b.created.localeCompare(a.created)
+  })
   if (!list.length) { el.innerHTML='<div class="empty">Brak własnych wpisów.</div>'; return }
 
   el.innerHTML = list.map(p => {
@@ -1487,15 +1554,13 @@ function buildApp() {
     </div>
 
     <div class="tabs">
-      <button class="tab active" data-tab="main"       onclick="switchTab('main')">Wpisy <span class="tab-badge" id="tab-main-badge">0</span></button>
-      <button class="tab"        data-tab="moje"       onclick="switchTab('moje')">Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
-      <button class="tab"        data-tab="archiwum"   onclick="switchTab('archiwum')">Archiwum <span class="tab-badge" id="tab-arch-badge">0</span></button>
-      <button class="tab"        data-tab="notatki"    onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
-      <button class="tab"        data-tab="ref"        onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
-      <button class="tab"        data-tab="konta"      onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
-      <button class="tab"        data-tab="tgsygnaly"  onclick="switchTab('tgsygnaly')">📡 TG Sygnały <span class="tab-badge" id="tab-tgsig-badge" style="background:rgba(245,158,11,.25);color:#f59e0b">0</span></button>
-      <button class="tab"        data-tab="tgwpisy"    onclick="switchTab('tgwpisy')">📋 TG Wpisy <span class="tab-badge" id="tab-tgwpisy-badge" style="background:rgba(124,58,237,.25);color:#a78bfa">0</span></button>
-      <button class="tab"        data-tab="kalendarz"  onclick="switchTab('kalendarz')">Kalendarz</button>
+      <button class="tab active" data-tab="main"    onclick="switchTab('main')">Wpisy <span class="tab-badge" id="tab-main-badge">0</span></button>
+      <button class="tab"        data-tab="moje"    onclick="switchTab('moje')">Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
+      <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
+      <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
+      <button class="tab"        data-tab="konta"   onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
+      <button class="tab"        data-tab="manual"  onclick="switchTab('manual')">✍ Dodaj ręcznie</button>
+      <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">Więcej ▾ <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
     </div>
 
     <!-- WPISY -->
@@ -1579,11 +1644,120 @@ function buildApp() {
       <div id="moje-cards"></div>
     </div>
 
-    <!-- ARCHIWUM -->
-    <div id="page-archiwum" class="page">
-      <div style="font-size:13px;color:var(--text2);margin-bottom:12px">Opublikowane wpisy. Przywróć do głównej zakładki jeśli potrzeba.</div>
-      <div id="arch-cards"></div>
+    <!-- DODAJ RĘCZNIE -->
+    <div id="page-manual" class="page">
+      <div class="section-header">
+        <span style="font-size:13px;color:var(--text2)">Dodaj post ręcznie — pojawi się w zakładce Wpisy</span>
+        <button class="btn-add" id="btn-add-manual" onclick="toggleManualForm()">+ Dodaj post ręcznie</button>
+      </div>
+      <div id="manual-form" style="display:none">
+        <div class="form-card">
+          <div class="form-title">Nowy post ręczny</div>
+          <div class="form-row full">
+            <div>
+              <div class="form-label">Treść posta *</div>
+              <textarea class="form-textarea" id="manual-text" style="min-height:120px" placeholder="Wklej lub wpisz treść posta..."></textarea>
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Konto / źródło</div>
+              <input class="form-input" id="manual-account" placeholder="np. elonmusk (bez @)">
+            </div>
+            <div>
+              <div class="form-label">Data posta</div>
+              <input class="form-input" type="datetime-local" id="manual-date">
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Link do posta (opcjonalnie)</div>
+              <input class="form-input" id="manual-link" placeholder="https://x.com/...">
+            </div>
+            <div>
+              <div class="form-label">Notatka</div>
+              <input class="form-input" id="manual-note" placeholder="np. źródło, kontekst...">
+            </div>
+          </div>
+          <div class="form-btns">
+            <button class="btn btn-primary" onclick="addManualPost()">Dodaj do Wpisów</button>
+            <button class="btn" onclick="toggleManualForm(false)">Anuluj</button>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:24px;padding:16px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl)">
+        <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:8px;text-transform:uppercase">Jak to działa?</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.6">
+          Post dodany ręcznie trafi do zakładki <strong style="color:var(--text)">Wpisy</strong> z zielonym badge'm <span style="font-size:11px;padding:1px 6px;border-radius:4px;background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.3)">✍ Ręczny</span>.<br>
+          Ma wszystkie funkcje jak posty pobrane przez bota — parafrazę, notatki, statusy, AI.
+        </div>
+      </div>
     </div>
+
+    <!-- WIĘCEJ (mega-zakładka z podzakładkami) -->
+    <div id="page-wiecej" class="page">
+      <div class="subnav">
+        <button class="subtab active" data-subtab="archiwum"  onclick="switchSubTab('archiwum')">Archiwum <span class="tab-badge" id="tab-arch-badge" style="background:rgba(0,229,255,.1);color:var(--neon)">0</span></button>
+        <button class="subtab"        data-subtab="tgsygnaly" onclick="switchSubTab('tgsygnaly')">📡 TG Sygnały <span class="tab-badge" id="tab-tgsig-badge" style="background:rgba(245,158,11,.25);color:#f59e0b">0</span></button>
+        <button class="subtab"        data-subtab="tgwpisy"   onclick="switchSubTab('tgwpisy')">📋 TG Wpisy <span class="tab-badge" id="tab-tgwpisy-badge" style="background:rgba(124,58,237,.25);color:#a78bfa">0</span></button>
+        <button class="subtab"        data-subtab="kalendarz" onclick="switchSubTab('kalendarz')">Kalendarz</button>
+      </div>
+
+      <!-- ARCHIWUM (podzakładka) -->
+      <div id="sub-archiwum" class="subpage active">
+        <div style="font-size:13px;color:var(--text2);margin-bottom:12px">Opublikowane wpisy. Przywróć do głównej zakładki jeśli potrzeba.</div>
+        <div id="arch-cards"></div>
+      </div>
+
+      <!-- TG SYGNAŁY (podzakładka) -->
+      <div id="sub-tgsygnaly" class="subpage">
+        <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+          <div class="stat"><div class="stat-n" id="tgsig-s-all"  style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
+          <div class="stat"><div class="stat-n" id="tgsig-s-new"  style="color:#f59e0b">0</div><div class="stat-l">Nowych</div></div>
+          <div class="stat"><div class="stat-n" id="tgsig-s-todo" style="color:var(--neon4)">0</div><div class="stat-l">W toku</div></div>
+          <div class="stat"><div class="stat-n" id="tgsig-s-done" style="color:var(--neon3)">0</div><div class="stat-l">Opublikowanych</div></div>
+        </div>
+        <div class="filters">
+          <select id="tgsig-channel" onchange="renderTgSygnaly()"><option value="">Wszystkie kanały</option></select>
+          <select id="tgsig-status"  onchange="renderTgSygnaly()">
+            <option value="">Wszystkie statusy</option>
+            <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
+          </select>
+          <input id="tgsig-search" placeholder="Szukaj w treści..." oninput="renderTgSygnaly()" style="flex:1;min-width:140px">
+        </div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
+          ⚡ Sygnały filtrowane według słów kluczowych zdefiniowanych w <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">tg_sygnaly.txt</code> na VPS
+        </div>
+        <div id="tgsig-cards"><div class="loading">Ładowanie...</div></div>
+      </div>
+
+      <!-- TG WPISY (podzakładka) -->
+      <div id="sub-tgwpisy" class="subpage">
+        <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+          <div class="stat"><div class="stat-n" id="tgwpisy-s-all"  style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
+          <div class="stat"><div class="stat-n" id="tgwpisy-s-new"  style="color:#a78bfa">0</div><div class="stat-l">Nowych</div></div>
+          <div class="stat"><div class="stat-n" id="tgwpisy-s-todo" style="color:var(--neon4)">0</div><div class="stat-l">W toku</div></div>
+          <div class="stat"><div class="stat-n" id="tgwpisy-s-done" style="color:var(--neon3)">0</div><div class="stat-l">Opublikowanych</div></div>
+        </div>
+        <div class="filters">
+          <select id="tgwpisy-channel" onchange="renderTgWpisy()"><option value="">Wszystkie kanały</option></select>
+          <select id="tgwpisy-status"  onchange="renderTgWpisy()">
+            <option value="">Wszystkie statusy</option>
+            <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
+          </select>
+          <input id="tgwpisy-search" placeholder="Szukaj w treści..." oninput="renderTgWpisy()" style="flex:1;min-width:140px">
+        </div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
+          📋 Wszystkie wiadomości z kanałów zdefiniowanych w <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">tg_wpisy.txt</code> na VPS
+        </div>
+        <div id="tgwpisy-cards"><div class="loading">Ładowanie...</div></div>
+      </div>
+
+      <!-- KALENDARZ (podzakładka) -->
+      <div id="sub-kalendarz" class="subpage">
+      </div>
+
+    </div><!-- /page-wiecej -->
 
     <!-- NOTATKI -->
     <div id="page-notatki" class="page">
@@ -1620,54 +1794,6 @@ function buildApp() {
     </div>
 
   
-    <!-- KALENDARZ -->
-    <div id="page-kalendarz" class="page">
-    </div>
-
-    <!-- TG SYGNAŁY -->
-    <div id="page-tgsygnaly" class="page">
-      <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr))">
-        <div class="stat"><div class="stat-n" id="tgsig-s-all"  style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
-        <div class="stat"><div class="stat-n" id="tgsig-s-new"  style="color:#f59e0b">0</div><div class="stat-l">Nowych</div></div>
-        <div class="stat"><div class="stat-n" id="tgsig-s-todo" style="color:var(--neon4)">0</div><div class="stat-l">W toku</div></div>
-        <div class="stat"><div class="stat-n" id="tgsig-s-done" style="color:var(--neon3)">0</div><div class="stat-l">Opublikowanych</div></div>
-      </div>
-      <div class="filters">
-        <select id="tgsig-channel" onchange="renderTgSygnaly()"><option value="">Wszystkie kanały</option></select>
-        <select id="tgsig-status"  onchange="renderTgSygnaly()">
-          <option value="">Wszystkie statusy</option>
-          <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
-        </select>
-        <input id="tgsig-search" placeholder="Szukaj w treści..." oninput="renderTgSygnaly()" style="flex:1;min-width:140px">
-      </div>
-      <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
-        ⚡ Sygnały filtrowane według słów kluczowych zdefiniowanych w <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">tg_sygnaly.txt</code> na VPS
-      </div>
-      <div id="tgsig-cards"><div class="loading">Ładowanie...</div></div>
-    </div>
-
-    <!-- TG WPISY -->
-    <div id="page-tgwpisy" class="page">
-      <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr))">
-        <div class="stat"><div class="stat-n" id="tgwpisy-s-all"  style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
-        <div class="stat"><div class="stat-n" id="tgwpisy-s-new"  style="color:#a78bfa">0</div><div class="stat-l">Nowych</div></div>
-        <div class="stat"><div class="stat-n" id="tgwpisy-s-todo" style="color:var(--neon4)">0</div><div class="stat-l">W toku</div></div>
-        <div class="stat"><div class="stat-n" id="tgwpisy-s-done" style="color:var(--neon3)">0</div><div class="stat-l">Opublikowanych</div></div>
-      </div>
-      <div class="filters">
-        <select id="tgwpisy-channel" onchange="renderTgWpisy()"><option value="">Wszystkie kanały</option></select>
-        <select id="tgwpisy-status"  onchange="renderTgWpisy()">
-          <option value="">Wszystkie statusy</option>
-          <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
-        </select>
-        <input id="tgwpisy-search" placeholder="Szukaj w treści..." oninput="renderTgWpisy()" style="flex:1;min-width:140px">
-      </div>
-      <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
-        📋 Wszystkie wiadomości z kanałów zdefiniowanych w <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">tg_wpisy.txt</code> na VPS
-      </div>
-      <div id="tgwpisy-cards"><div class="loading">Ładowanie...</div></div>
-    </div>
-
     <!-- KONTA -->
     <div id="page-konta" class="page">
       <div class="section-header">
@@ -1721,7 +1847,7 @@ function buildApp() {
 
 // ── KALENDARZ ────────────────────────────────────────────────────
 function renderKalendarz() {
-  const el = document.getElementById('page-kalendarz')
+  const el = document.getElementById('sub-kalendarz')
   if (!el) return
 
   // Zbierz wszystkie opublikowane wpisy z posts i myPosts
@@ -1767,10 +1893,17 @@ function renderKalendarz() {
   let maxDay = '', maxCount = 0
   dates.forEach(d => { if (byDate[d].length > maxCount) { maxCount = byDate[d].length; maxDay = d } })
 
-  // Aktywność ostatnie 4 tygodnie (heatmapa)
+  // Heatmapa — ostatnie 8 tygodni (56 dni), wyrównana do poniedziałku
+  const heatmapDays = 56
+  const heatEnd = new Date(today)
+  // Znajdź ostatnią niedzielę (koniec tygodnia)
+  const dayOfWeek = (heatEnd.getDay() + 6) % 7 // 0=Pn, 6=Nd
+  const heatStart = new Date(heatEnd)
+  heatStart.setDate(heatStart.getDate() - dayOfWeek - (heatmapDays - 7))
+
   const heatmap = []
-  for (let i = 27; i >= 0; i--) {
-    const d = new Date(today); d.setDate(d.getDate() - i)
+  for (let i = 0; i < heatmapDays; i++) {
+    const d = new Date(heatStart); d.setDate(d.getDate() + i)
     const ds = d.toISOString().slice(0, 10)
     heatmap.push({ date: ds, count: byDate[ds] ? byDate[ds].length : 0 })
   }
@@ -1784,21 +1917,21 @@ function renderKalendarz() {
     return 'background:rgba(0,229,255,0.9)'
   }
 
-  // Statystyki per konto
-  const byAccount = {}
-  published.forEach(p => {
-    byAccount[p.account] = (byAccount[p.account] || 0) + 1
-  })
-  const topAccounts = Object.entries(byAccount).sort((a, b) => b[1] - a[1]).slice(0, 5)
-
-  // Aktywność per miesiąc
+  // Aktywność per miesiąc — ostatnie 12 miesięcy
   const byMonth = {}
   published.forEach(p => {
     const m = p.date.slice(0, 7)
     byMonth[m] = (byMonth[m] || 0) + 1
   })
-  const months = Object.entries(byMonth).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 6)
+  const months = Object.entries(byMonth).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 12)
   const maxMonth = Math.max(...months.map(m => m[1]), 1)
+
+  // Formatuj miesiąc czytelnie: "2025-04" → "Kwi 2025"
+  const MIESIAC = ['Sty','Lut','Mar','Kwi','Maj','Cze','Lip','Sie','Wrz','Paź','Lis','Gru']
+  function formatMonth(ym) {
+    const [y, m] = ym.split('-')
+    return `${MIESIAC[parseInt(m,10)-1]} ${y}`
+  }
 
   el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:20px">
@@ -1811,7 +1944,7 @@ function renderKalendarz() {
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
 
       <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);padding:14px">
-        <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">Aktywność — ostatnie 4 tygodnie</div>
+        <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">Aktywność — ostatnie 8 tygodni</div>
         <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">
           ${['Pn','Wt','Śr','Cz','Pt','Sb','Nd'].map(d=>`<div style="font-size:9px;color:var(--text3);text-align:center">${d}</div>`).join('')}
         </div>
@@ -1829,27 +1962,15 @@ function renderKalendarz() {
         <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">Aktywność miesięczna</div>
         ${months.length ? months.map(([m, cnt]) => `
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
-            <span style="font-size:12px;color:var(--text2);min-width:65px">${m}</span>
+            <span style="font-size:12px;color:var(--text2);min-width:72px;white-space:nowrap">${formatMonth(m)}</span>
             <div style="flex:1;height:14px;background:var(--bg3);border-radius:3px;overflow:hidden">
               <div style="height:100%;width:${Math.round(cnt/maxMonth*100)}%;background:var(--neon);border-radius:3px;transition:width .3s"></div>
             </div>
-            <span style="font-size:12px;color:var(--neon);min-width:20px;text-align:right">${cnt}</span>
+            <span style="font-size:12px;color:var(--neon);min-width:24px;text-align:right">${cnt}</span>
           </div>`).join('') : '<div style="color:var(--text3);font-size:13px">Brak danych</div>'}
       </div>
 
     </div>
-
-    ${topAccounts.length ? `
-    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);padding:14px;margin-bottom:20px">
-      <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">Top źródła wpisów</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">
-        ${topAccounts.map(([acc, cnt]) => `
-          <div style="background:var(--bg3);border-radius:var(--r);padding:10px;text-align:center">
-            <div style="font-size:13px;font-weight:700;color:var(--neon)">${cnt}</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${acc}</div>
-          </div>`).join('')}
-      </div>
-    </div>` : ''}
 
     <div style="font-size:13px;font-weight:700;color:var(--text2);margin-bottom:10px">
       Historia publikacji — kliknij dzień aby zobaczyć wpisy
@@ -1928,7 +2049,7 @@ function copyRefFromSelect(selectId) {
 
 // ── EXPOSE ────────────────────────────────────────────────────────
 Object.assign(window, {
-  loginGoogle, logout, switchTab, syncSheets,
+  loginGoogle, logout, switchTab, switchSubTab, syncSheets,
   renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText,
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
   addMyPost, toggleMyForm, publishMyPost, deleteMyPost, saveMyNote,
@@ -1942,6 +2063,7 @@ Object.assign(window, {
   renderKonta, toggleKatForm, addKategoria, startKatEdit, cancelKatEdit, saveKatEdit, deleteKategoria,
   addAccount, startAccEdit, cancelAccEdit, saveAccEdit, deleteAccount,
   triggerAIPara,
+  toggleManualForm, addManualPost,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
@@ -1967,8 +2089,8 @@ onAuthStateChanged(auth, async user => {
       tgs.forEach(d => { if (!tgSignals[d.id]) tgSigNew++; tgSignals[d.id] = d.data() })
       tgw.forEach(d => { if (!tgWpisy[d.id])   tgWpisNew++; tgWpisy[d.id]  = d.data() })
       updateBadges()
-      if (tgSigNew > 0) { toast(`📡 ${tgSigNew} nowych sygnałów TG!`); if(document.getElementById('page-tgsygnaly')?.classList.contains('active')) renderTgSygnaly() }
-      if (tgWpisNew > 0) { toast(`📋 ${tgWpisNew} nowych wpisów TG!`); if(document.getElementById('page-tgwpisy')?.classList.contains('active')) renderTgWpisy() }
+      if (tgSigNew > 0) { toast(`📡 ${tgSigNew} nowych sygnałów TG!`); if(document.getElementById('sub-tgsygnaly')?.classList.contains('active')) renderTgSygnaly() }
+      if (tgWpisNew > 0) { toast(`📋 ${tgWpisNew} nowych wpisów TG!`); if(document.getElementById('sub-tgwpisy')?.classList.contains('active')) renderTgWpisy() }
     }, 2 * 60 * 1000)
   } else {
     showAuthScreen()

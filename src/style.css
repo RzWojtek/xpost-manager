@@ -236,3 +236,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .btn-ai-para:active{transform:translateY(0)}
 .btn-ai-para:disabled{opacity:.45;cursor:not-allowed;transform:none}
 .ai-para-info{font-size:10px;color:#00e5ff88;min-height:14px;margin-bottom:2px;padding:0 1px}
+
+/* SUBNAV (podzakładki w zakładce Więcej) */
+.subnav{display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--border2);overflow-x:auto}
+.subtab{font-size:13px;padding:8px 16px;cursor:pointer;border:none;background:transparent;color:var(--text2);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s;font-family:inherit}
+.subtab:hover{color:var(--text);background:var(--bg2)}
+.subtab.active{color:var(--neon);border-bottom:2px solid var(--neon);font-weight:600}
+.subpage{display:none}
+.subpage.active{display:block}
