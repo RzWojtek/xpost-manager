@@ -244,3 +244,37 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .subtab.active{color:var(--neon);border-bottom:2px solid var(--neon);font-weight:600}
 .subpage{display:none}
 .subpage.active{display:block}
+
+/* AIRDROP TABLE */
+.at-table{width:100%;border-collapse:collapse;font-size:12px}
+.at-table th{background:var(--bg3);color:var(--text3);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;text-align:left;white-space:nowrap;border-bottom:2px solid var(--border2);position:sticky;top:0;z-index:2}
+.at-table td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+.at-row:hover td{background:rgba(255,255,255,.025)}
+.at-row-done td{opacity:.55}
+.at-row-done:hover td{opacity:.8}
+.at-status-sel{font-size:11px;padding:3px 7px;border-radius:4px;border:1px solid var(--border2);cursor:pointer;font-family:inherit;font-weight:700;white-space:nowrap;max-width:170px}
+.at-type-sel{font-size:11px;padding:3px 7px;border-radius:4px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);cursor:pointer;font-family:inherit;min-width:90px}
+.at-status-sel:focus,.at-type-sel:focus{outline:none;border-color:var(--neon)}
+.at-project-cell{font-weight:700;color:var(--text);min-width:110px;max-width:180px;word-break:break-word}
+.at-tasks-cell{font-size:12px;color:var(--text2);line-height:1.5;min-width:140px;max-width:260px;word-break:break-word}
+.at-sm-cell{font-size:11px;color:var(--text3);min-width:70px;max-width:120px;word-break:break-word}
+.at-link-cell{min-width:90px;max-width:160px}
+.at-links-cell{min-width:110px;max-width:200px}
+.at-link{font-size:11px;color:var(--neon);text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 0}
+.at-link:hover{text-decoration:underline}
+
+/* AIRDROP CARDS */
+.at-card{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);overflow:hidden;margin-bottom:10px;transition:border-color .15s}
+.at-card:hover{border-color:var(--border3)}
+.at-card-done{opacity:.55}
+.at-card-done:hover{opacity:.9}
+.at-card-head{display:flex;align-items:center;gap:8px;padding:10px 14px 9px;flex-wrap:wrap;border-bottom:1px solid var(--border)}
+.at-card-project{font-size:14px;font-weight:700;color:var(--text)}
+.at-type-badge{font-size:10px;padding:2px 7px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700;white-space:nowrap}
+.at-card-tasks{font-size:13px;color:var(--text2);padding:9px 14px;line-height:1.6;word-break:break-word;border-bottom:1px solid var(--border)}
+.at-card-foot{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 14px}
+.at-meta{font-size:11px;color:var(--text3);white-space:nowrap}
+.at-card-img{width:100%;max-height:220px;object-fit:cover;cursor:pointer;display:block;border-top:1px solid var(--border)}
+
+/* Przycisk widoku aktywny */
+.at-view-btn.active{background:var(--neon)!important;color:#000!important;font-weight:700}

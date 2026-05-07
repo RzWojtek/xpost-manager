@@ -318,6 +318,7 @@ let notes      = {}
 let tgSignals  = {}
 let tgWpisy    = {}
 let konta      = {}   // kategorie kont: { katId: { id, name, icon, note, accounts: [{id,name,note}] } }
+let airdropTasks = {} // projekty airdrop/testnet: { docId: { id, status, type, project, tasks, date, socialLink, testnetLinks, wallet, imgUrl, note, addedAt } }
 let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
 
 // Filter state — zarządzane lokalnie
@@ -335,6 +336,12 @@ let tgSigSearch  = ''
 let tgWpisChannel= ''
 let tgWpisStatus = ''
 let tgWpisSearch = ''
+
+// Airdrop filter state
+let atSearch  = ''
+let atStatus  = ''
+let atType    = ''
+let atView    = 'table' // 'table' | 'cards'
 
 // ── UTILS ─────────────────────────────────────────────────────────
 const nowStr = () => new Date().toLocaleString('pl-PL',{hour12:false}).replace(',','')
@@ -470,8 +477,8 @@ async function logout() {
 
 // ── FIREBASE LOAD ─────────────────────────────────────────────────
 async function loadAll() {
-  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}
-  const [ps, ms, rs, ns, tgs, tgw, ks] = await Promise.all([
+  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}
+  const [ps, ms, rs, ns, tgs, tgw, ks, at] = await Promise.all([
     getDocs(query(collection(db,'posts'),      orderBy('xDate','desc'))),
     getDocs(query(collection(db,'myPosts'),    orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
@@ -479,14 +486,16 @@ async function loadAll() {
     getDocs(query(collection(db,'tgSignals'),  orderBy('addedAt','desc'))),
     getDocs(query(collection(db,'tgWpisy'),    orderBy('addedAt','desc'))),
     getDocs(collection(db,'konta')),
+    getDocs(query(collection(db,'airdropTasks'), orderBy('addedAt','desc'))),
   ])
-  ps.forEach(d  => { posts[d.id]     = d.data() })
-  ms.forEach(d  => { myPosts[d.id]   = d.data() })
-  rs.forEach(d  => { refLinks[d.id]  = d.data() })
-  ns.forEach(d  => { notes[d.id]     = d.data() })
-  tgs.forEach(d => { tgSignals[d.id] = d.data() })
-  tgw.forEach(d => { tgWpisy[d.id]   = d.data() })
-  ks.forEach(d  => { konta[d.id]     = d.data() })
+  ps.forEach(d  => { posts[d.id]        = d.data() })
+  ms.forEach(d  => { myPosts[d.id]      = d.data() })
+  rs.forEach(d  => { refLinks[d.id]     = d.data() })
+  ns.forEach(d  => { notes[d.id]        = d.data() })
+  tgs.forEach(d => { tgSignals[d.id]    = d.data() })
+  tgw.forEach(d => { tgWpisy[d.id]      = d.data() })
+  ks.forEach(d  => { konta[d.id]        = d.data() })
+  at.forEach(d  => { airdropTasks[d.id] = d.data() })
 }
 
 // ── SHEETS SYNC ───────────────────────────────────────────────────
@@ -543,7 +552,7 @@ function switchTab(name) {
   const pageEl = document.getElementById(`page-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}}
+  const fn = {main:renderMain, moje:renderMoje, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop}
   if (fn[name]) fn[name]()
   // Wiecej — renderuj aktywną podzakładkę
   if (name === 'wiecej') {
@@ -813,6 +822,7 @@ function updateBadges() {
   s('tab-notes-badge',  Object.keys(notes).length)
   s('tab-ref-badge',    Object.keys(refLinks).length)
   s('tab-konta-badge',  Object.values(konta).reduce((sum,k)=>(k.accounts||[]).length+sum, 0))
+  s('tab-airdrop-badge', Object.keys(airdropTasks).length)
   s('tab-tgsig-badge',  Object.values(tgSignals).filter(p=>p.status==='Nowy').length)
   s('tab-tgwpisy-badge',Object.values(tgWpisy).filter(p=>p.status==='Nowy').length)
   // Badge "Więcej" = suma nowych TG sygnałów + TG wpisów
@@ -1539,6 +1549,305 @@ function toggleTgExpand(prefix, id) {
   if (b) b.textContent = ex ? 'Rozwiń' : 'Zwiń'
 }
 
+// ── AIRDROP TASKS ─────────────────────────────────────────────────
+const AT_STATUSES = ['TODO','DONE na 1 koncie','DONE na 3 walletach','DONE na 3 kontach gmail','DONE na 5 walletach','Pominięty']
+const AT_TYPES    = ['Testnet','Mainnet','WL','Airdrop','Inne']
+
+function atStatusStyle(s) {
+  if (!s) return 'background:rgba(245,158,11,.12);color:#f59e0b'
+  if (s.startsWith('TODO')) return 'background:rgba(245,158,11,.12);color:#f59e0b'
+  if (s.startsWith('DONE')) return 'background:rgba(16,185,129,.12);color:#10b981'
+  if (s === 'Pominięty')    return 'background:rgba(239,68,68,.1);color:#ef4444'
+  return 'background:var(--bg3);color:var(--text2)'
+}
+
+function renderAirdrop() {
+  const el = document.getElementById('airdrop-content')
+  if (!el) return
+
+  const inpSr = document.getElementById('at-search')
+  const selSt = document.getElementById('at-status')
+  const selTy = document.getElementById('at-type')
+  if (inpSr) atSearch = inpSr.value.toLowerCase()
+  if (selSt) atStatus = selSt.value
+  if (selTy) atType   = selTy.value
+
+  const list = Object.entries(airdropTasks)
+    .filter(([,p]) => {
+      if (atStatus && p.status !== atStatus) return false
+      if (atType   && p.type   !== atType)   return false
+      if (atSearch) {
+        const hay = [p.project, p.tasks, p.note, p.wallet].join(' ').toLowerCase()
+        if (!hay.includes(atSearch)) return false
+      }
+      return true
+    })
+    .sort(([,a],[,b]) => {
+      // TODO na górze, DONE na dole
+      const aD = a.status?.startsWith('DONE') || a.status === 'Pominięty'
+      const bD = b.status?.startsWith('DONE') || b.status === 'Pominięty'
+      if (aD !== bD) return aD ? 1 : -1
+      return (b.addedAt||'').localeCompare(a.addedAt||'')
+    })
+
+  const statsEl = document.getElementById('at-stats-all')
+  const statsTodo = document.getElementById('at-stats-todo')
+  const statsDone = document.getElementById('at-stats-done')
+  const allTasks = Object.values(airdropTasks)
+  if (statsEl)   statsEl.textContent   = allTasks.length
+  if (statsTodo) statsTodo.textContent = allTasks.filter(p => p.status?.startsWith('TODO') || !p.status).length
+  if (statsDone) statsDone.textContent = allTasks.filter(p => p.status?.startsWith('DONE')).length
+
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">Brak projektów pasujących do filtrów.</div>'
+    return
+  }
+
+  if (atView === 'table') {
+    el.innerHTML = `
+      <div style="overflow-x:auto">
+        <table class="at-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Typ</th>
+              <th>Projekt</th>
+              <th>Zadania</th>
+              <th>Data</th>
+              <th>Link socjali</th>
+              <th>Linki testnet</th>
+              <th>Portfel</th>
+              <th>Notatka</th>
+              <th>Akcje</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${list.map(([docId, p]) => `
+              <tr class="at-row${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-row-done' : ''}">
+                <td>
+                  <select class="at-status-sel" style="${atStatusStyle(p.status)}" onchange="setAtStatus('${docId}',this.value)">
+                    ${AT_STATUSES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
+                  </select>
+                </td>
+                <td>
+                  <select class="at-type-sel" onchange="setAtField('${docId}','type',this.value)">
+                    <option value="">—</option>
+                    ${AT_TYPES.map(t=>`<option${t===p.type?' selected':''}>${t}</option>`).join('')}
+                  </select>
+                </td>
+                <td><div class="at-project-cell" title="${p.project||''}">${p.project||'—'}</div></td>
+                <td><div class="at-tasks-cell">${(p.tasks||'').replace(/\n/g,'<br>')}</div></td>
+                <td><div class="at-sm-cell">${p.date||''}</div></td>
+                <td><div class="at-link-cell">${p.socialLink ? `<a href="${p.socialLink}" target="_blank" class="at-link" title="${p.socialLink}">${p.socialLink.replace(/^https?:\/\//,'').slice(0,30)}</a>` : ''}</div></td>
+                <td><div class="at-links-cell">${(p.testnetLinks||'').split('\n').filter(Boolean).map(l=>`<a href="${l.trim()}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,28)}</a>`).join('<br>')}</div></td>
+                <td><div class="at-sm-cell">${p.wallet||''}</div></td>
+                <td><div class="at-sm-cell">${p.note||''}</div></td>
+                <td>
+                  <div style="display:flex;gap:4px">
+                    <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')">✏️</button>
+                    <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')">✕</button>
+                  </div>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`
+  } else {
+    // Widok kart
+    el.innerHTML = list.map(([docId, p]) => `
+      <div class="at-card${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-card-done' : ''}">
+        <div class="at-card-head">
+          <span class="at-card-project">${p.project||'(brak nazwy)'}</span>
+          ${p.type ? `<span class="at-type-badge">${p.type}</span>` : ''}
+          <select class="at-status-sel" style="${atStatusStyle(p.status)};margin-left:auto" onchange="setAtStatus('${docId}',this.value)">
+            ${AT_STATUSES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
+          </select>
+          <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')">✏️</button>
+          <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')">✕</button>
+        </div>
+        ${p.tasks ? `<div class="at-card-tasks">${p.tasks.replace(/\n/g,'<br>')}</div>` : ''}
+        <div class="at-card-foot">
+          ${p.date ? `<span class="at-meta">📅 ${p.date}</span>` : ''}
+          ${p.wallet ? `<span class="at-meta">👛 ${p.wallet}</span>` : ''}
+          ${p.note ? `<span class="at-meta">📝 ${p.note}</span>` : ''}
+          ${p.socialLink ? `<a href="${p.socialLink}" target="_blank" class="at-link">Socjale ↗</a>` : ''}
+          ${(p.testnetLinks||'').split('\n').filter(Boolean).map((l,i)=>`<a href="${l.trim()}" target="_blank" class="at-link">Link ${i+1} ↗</a>`).join('')}
+        </div>
+        ${p.imgUrl ? `<img src="${p.imgUrl}" class="at-card-img" alt="screenshot" onclick="window.open('${p.imgUrl}','_blank')">` : ''}
+      </div>`).join('')
+  }
+}
+
+async function setAtStatus(docId, status) {
+  if (!airdropTasks[docId]) return
+  airdropTasks[docId].status = status
+  await updateDoc(doc(db, 'airdropTasks', docId), { status })
+  renderAirdrop()
+}
+
+async function setAtField(docId, field, value) {
+  if (!airdropTasks[docId]) return
+  airdropTasks[docId][field] = value
+  await updateDoc(doc(db, 'airdropTasks', docId), { [field]: value })
+}
+
+async function deleteAt(docId) {
+  if (!confirm('Usunąć ten projekt?')) return
+  await deleteDoc(doc(db, 'airdropTasks', docId))
+  delete airdropTasks[docId]
+  renderAirdrop()
+  toast('Usunięto ✓')
+}
+
+function toggleAtView(v) {
+  atView = v
+  document.querySelectorAll('.at-view-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.view === v)
+  })
+  renderAirdrop()
+}
+
+function toggleAtForm(show) {
+  const f = document.getElementById('at-form')
+  const b = document.getElementById('btn-add-at')
+  if (!f || !b) return
+  if (show === undefined) show = f.style.display === 'none'
+  f.style.display = show ? 'block' : 'none'
+  b.textContent   = show ? '✕ Zamknij' : '+ Dodaj projekt'
+  if (show) {
+    document.getElementById('at-edit-id').value = ''
+    ;['at-f-project','at-f-tasks','at-f-date','at-f-social','at-f-testnet','at-f-wallet','at-f-note','at-f-imgurl'].forEach(id => {
+      const el = document.getElementById(id)
+      if (el) el.value = ''
+    })
+    const sel = document.getElementById('at-f-status')
+    if (sel) sel.value = 'TODO'
+    const ty = document.getElementById('at-f-type')
+    if (ty) ty.value = ''
+    const title = document.getElementById('at-form-title')
+    if (title) title.textContent = 'Nowy projekt'
+  }
+}
+
+function openAtEdit(docId) {
+  const p = airdropTasks[docId]
+  if (!p) return
+  toggleAtForm(true)
+  document.getElementById('at-edit-id').value = docId
+  document.getElementById('at-f-project').value  = p.project || ''
+  document.getElementById('at-f-tasks').value    = p.tasks || ''
+  document.getElementById('at-f-date').value     = p.date || ''
+  document.getElementById('at-f-social').value   = p.socialLink || ''
+  document.getElementById('at-f-testnet').value  = p.testnetLinks || ''
+  document.getElementById('at-f-wallet').value   = p.wallet || ''
+  document.getElementById('at-f-note').value     = p.note || ''
+  document.getElementById('at-f-imgurl').value   = p.imgUrl || ''
+  const sel = document.getElementById('at-f-status')
+  if (sel) sel.value = p.status || 'TODO'
+  const ty = document.getElementById('at-f-type')
+  if (ty) ty.value = p.type || ''
+  const title = document.getElementById('at-form-title')
+  if (title) title.textContent = 'Edytuj projekt'
+  document.getElementById('at-form').scrollIntoView({ behavior:'smooth', block:'start' })
+}
+
+async function saveAt() {
+  const editId  = document.getElementById('at-edit-id').value.trim()
+  const project = document.getElementById('at-f-project').value.trim()
+  const tasks   = document.getElementById('at-f-tasks').value.trim()
+  const date    = document.getElementById('at-f-date').value.trim()
+  const social  = document.getElementById('at-f-social').value.trim()
+  const testnet = document.getElementById('at-f-testnet').value.trim()
+  const wallet  = document.getElementById('at-f-wallet').value.trim()
+  const note    = document.getElementById('at-f-note').value.trim()
+  const imgUrl  = document.getElementById('at-f-imgurl').value.trim()
+  const status  = document.getElementById('at-f-status').value
+  const type    = document.getElementById('at-f-type').value
+
+  if (!project && !tasks) { toast('Wpisz nazwę projektu lub zadania!'); return }
+
+  const docId = editId || ('at_' + uid())
+  const entry = { id: docId, status, type, project, tasks, date, socialLink: social, testnetLinks: testnet, wallet, imgUrl, note, addedAt: nowStr() }
+
+  if (editId) {
+    // zachowaj oryginalne addedAt
+    entry.addedAt = airdropTasks[editId]?.addedAt || nowStr()
+  }
+
+  await setDoc(doc(db, 'airdropTasks', docId), entry)
+  airdropTasks[docId] = entry
+  toggleAtForm(false)
+  renderAirdrop()
+  toast(editId ? 'Zaktualizowano ✓' : 'Dodano projekt ✓')
+}
+
+// Import z .xlsx — używa SheetJS (CDN)
+async function importAtXlsx(input) {
+  const file = input.files?.[0]
+  if (!file) return
+  const statusEl = document.getElementById('at-import-status')
+  if (statusEl) statusEl.textContent = 'Wczytuję plik...'
+
+  // Lazy-load SheetJS
+  if (!window.XLSX) {
+    await new Promise((res, rej) => {
+      const s = document.createElement('script')
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+      s.onload = res; s.onerror = rej
+      document.head.appendChild(s)
+    })
+  }
+
+  const reader = new FileReader()
+  reader.onload = async e => {
+    try {
+      const wb   = XLSX.read(e.target.result, { type: 'array' })
+      const ws   = wb.Sheets[wb.SheetNames[0]]
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+
+      // Pomiń nagłówek (wiersz 0), importuj od wiersza 1
+      let imported = 0
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i]
+        // Kolumny: A=status, B=typ, C=projekt, D=zadania, E=data, F=link_socjali, G=linki_testnet, H=portfel, I=notatka
+        const project = String(r[2] || '').trim()
+        const tasks   = String(r[3] || '').trim()
+        if (!project && !tasks) continue // pomiń puste wiersze
+
+        const docId = 'at_' + uid()
+        const entry = {
+          id: docId,
+          status:       String(r[0] || 'TODO').trim() || 'TODO',
+          type:         String(r[1] || '').trim(),
+          project,
+          tasks,
+          date:         String(r[4] || '').trim(),
+          socialLink:   String(r[5] || '').trim(),
+          testnetLinks: String(r[6] || '').trim(),
+          wallet:       String(r[7] || '').trim(),
+          note:         String(r[8] || '').trim(),
+          imgUrl:       '',
+          addedAt:      nowStr(),
+        }
+        await setDoc(doc(db, 'airdropTasks', docId), entry)
+        airdropTasks[docId] = entry
+        imported++
+      }
+
+      if (statusEl) statusEl.textContent = `✅ Zaimportowano ${imported} wierszy`
+      renderAirdrop()
+      toast(`Import zakończony: ${imported} projektów ✓`)
+    } catch(err) {
+      if (statusEl) statusEl.textContent = '❌ Błąd: ' + err.message
+      toast('Błąd importu: ' + err.message)
+    }
+  }
+  reader.readAsArrayBuffer(file)
+  input.value = '' // resetuj input
+}
+
+// ── KONIEC: AIRDROP TASKS ─────────────────────────────────────────
+
 // ── BUILD HTML ────────────────────────────────────────────────────
 function buildApp() {
   document.getElementById('app').innerHTML = `
@@ -1577,6 +1886,7 @@ function buildApp() {
       <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
       <button class="tab"        data-tab="konta"   onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
       <button class="tab"        data-tab="manual"  onclick="switchTab('manual')">✍ Dodaj ręcznie</button>
+      <button class="tab"        data-tab="airdrop" onclick="switchTab('airdrop')">🪂 Projekty <span class="tab-badge" id="tab-airdrop-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
       <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">Więcej ▾ <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
     </div>
 
@@ -1709,6 +2019,115 @@ function buildApp() {
           Ma wszystkie funkcje jak posty pobrane przez bota — parafrazę, notatki, statusy, AI.
         </div>
       </div>
+    </div>
+
+    <!-- PROJEKTY AIRDROP/TESTNET -->
+    <div id="page-airdrop" class="page">
+      <!-- Statystyki -->
+      <div class="stats" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:14px">
+        <div class="stat"><div class="stat-n" id="at-stats-all"  style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
+        <div class="stat"><div class="stat-n" id="at-stats-todo" style="color:var(--neon4)">0</div><div class="stat-l">TODO</div></div>
+        <div class="stat"><div class="stat-n" id="at-stats-done" style="color:var(--neon3)">0</div><div class="stat-l">DONE</div></div>
+      </div>
+
+      <!-- Pasek narzędzi -->
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" id="btn-add-at" onclick="toggleAtForm()" style="white-space:nowrap">+ Dodaj projekt</button>
+        <div style="display:flex;gap:2px;border:1px solid var(--border2);border-radius:var(--r);overflow:hidden">
+          <button class="at-view-btn active" data-view="table" onclick="toggleAtView('table')" style="padding:6px 14px;font-size:12px;border:none;background:var(--bg3);color:var(--text);cursor:pointer;font-family:inherit">☰ Tabela</button>
+          <button class="at-view-btn" data-view="cards" onclick="toggleAtView('cards')" style="padding:6px 14px;font-size:12px;border:none;background:transparent;color:var(--text2);cursor:pointer;font-family:inherit">▦ Karty</button>
+        </div>
+        <label class="btn" style="cursor:pointer;position:relative;white-space:nowrap">
+          📥 Import .xlsx
+          <input type="file" accept=".xlsx,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="importAtXlsx(this)">
+        </label>
+        <span id="at-import-status" style="font-size:12px;color:var(--text3)"></span>
+      </div>
+
+      <!-- Filtry -->
+      <div class="filters" style="margin-bottom:12px">
+        <input id="at-search" placeholder="🔍 Szukaj projektu, zadań..." oninput="renderAirdrop()" style="flex:1;min-width:160px">
+        <select id="at-status" onchange="renderAirdrop()">
+          <option value="">Wszystkie statusy</option>
+          ${AT_STATUSES.map(s=>`<option>${s}</option>`).join('')}
+        </select>
+        <select id="at-type" onchange="renderAirdrop()">
+          <option value="">Wszystkie typy</option>
+          ${AT_TYPES.map(t=>`<option>${t}</option>`).join('')}
+        </select>
+      </div>
+
+      <!-- Formularz dodawania / edycji -->
+      <div id="at-form" style="display:none;margin-bottom:16px">
+        <div class="form-card">
+          <div class="form-title" id="at-form-title">Nowy projekt</div>
+          <input type="hidden" id="at-edit-id">
+          <div class="form-row">
+            <div>
+              <div class="form-label">Projekt / nazwa *</div>
+              <input class="form-input" id="at-f-project" placeholder="np. Initia, Monad, Babylon...">
+            </div>
+            <div>
+              <div class="form-label">Typ</div>
+              <select class="form-select" id="at-f-type">
+                <option value="">— wybierz —</option>
+                ${AT_TYPES.map(t=>`<option>${t}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Status</div>
+              <select class="form-select" id="at-f-status">
+                ${AT_STATUSES.map(s=>`<option>${s}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <div class="form-label">Data działań</div>
+              <input class="form-input" id="at-f-date" placeholder="np. 2025-01, Q1 2026...">
+            </div>
+          </div>
+          <div class="form-row full">
+            <div>
+              <div class="form-label">Zadania (co robiłeś)</div>
+              <textarea class="form-textarea" id="at-f-tasks" style="min-height:90px" placeholder="np. Wykonaj swapy tokenów&#10;Zapewnij płynność&#10;Wypełnij formularz"></textarea>
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Link do socjali (Twitter, Discord...)</div>
+              <input class="form-input" id="at-f-social" placeholder="https://twitter.com/...">
+            </div>
+            <div>
+              <div class="form-label">Portfel (Rabby, Phantom, Unisat...)</div>
+              <input class="form-input" id="at-f-wallet" placeholder="np. Rabby, Phantom">
+            </div>
+          </div>
+          <div class="form-row full">
+            <div>
+              <div class="form-label">Linki do testnet/działań (każdy w nowej linii)</div>
+              <textarea class="form-textarea" id="at-f-testnet" style="min-height:70px" placeholder="https://app.przykład.xyz&#10;https://quest.przykład.xyz"></textarea>
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Notatka</div>
+              <input class="form-input" id="at-f-note" placeholder="Dodatkowe informacje...">
+            </div>
+            <div>
+              <div class="form-label">URL zdjęcia (screenshot, Cloudinary...)</div>
+              <input class="form-input" id="at-f-imgurl" placeholder="https://...">
+            </div>
+          </div>
+          <div class="form-btns">
+            <button class="btn btn-primary" onclick="saveAt()">Zapisz</button>
+            <button class="btn" onclick="toggleAtForm(false)">Anuluj</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Treść tabeli / karty -->
+      <div id="airdrop-content"><div class="loading">Ładowanie...</div></div>
     </div>
 
     <!-- WIĘCEJ (mega-zakładka z podzakładkami) -->
@@ -2083,6 +2502,7 @@ Object.assign(window, {
   addAccount, startAccEdit, cancelAccEdit, saveAccEdit, deleteAccount,
   triggerAIPara,
   toggleManualForm, addManualPost,
+  renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
@@ -2094,7 +2514,7 @@ onAuthStateChanged(auth, async user => {
     await loadAll()
     await loadEmojis()
     renderEmojiPanel()
-    renderMain(); renderMoje(); renderNotes(); renderRef(); renderKonta()
+    renderMain(); renderMoje(); renderNotes(); renderRef(); renderKonta(); renderAirdrop()
     updateStats(); updateBadges()
     await syncSheets()
     setInterval(syncSheets, 5 * 60 * 1000)
