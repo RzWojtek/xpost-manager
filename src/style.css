@@ -278,3 +278,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
 /* Przycisk widoku aktywny */
 .at-view-btn.active{background:var(--neon)!important;color:#000!important;font-weight:700}
+
+/* Zaznaczone wiersze / karty */
+.at-row-sel td{background:rgba(239,68,68,.07)!important}
+.at-card-sel{border-color:rgba(239,68,68,.5)!important;background:rgba(239,68,68,.04)!important}
+
+/* Checkbox styling */
+.at-chk{width:15px;height:15px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0}

@@ -342,6 +342,7 @@ let atSearch  = ''
 let atStatus  = ''
 let atType    = ''
 let atView    = 'table' // 'table' | 'cards'
+let atSelected = new Set() // zaznaczone docId do masowego usuwania
 
 // ── UTILS ─────────────────────────────────────────────────────────
 const nowStr = () => new Date().toLocaleString('pl-PL',{hour12:false}).replace(',','')
@@ -1583,20 +1584,24 @@ function renderAirdrop() {
       return true
     })
     .sort(([,a],[,b]) => {
-      // TODO na górze, DONE na dole
       const aD = a.status?.startsWith('DONE') || a.status === 'Pominięty'
       const bD = b.status?.startsWith('DONE') || b.status === 'Pominięty'
       if (aD !== bD) return aD ? 1 : -1
       return (b.addedAt||'').localeCompare(a.addedAt||'')
     })
 
-  const statsEl = document.getElementById('at-stats-all')
-  const statsTodo = document.getElementById('at-stats-todo')
-  const statsDone = document.getElementById('at-stats-done')
-  const allTasks = Object.values(airdropTasks)
+  const statsEl    = document.getElementById('at-stats-all')
+  const statsTodo  = document.getElementById('at-stats-todo')
+  const statsDone  = document.getElementById('at-stats-done')
+  const allTasks   = Object.values(airdropTasks)
   if (statsEl)   statsEl.textContent   = allTasks.length
   if (statsTodo) statsTodo.textContent = allTasks.filter(p => p.status?.startsWith('TODO') || !p.status).length
   if (statsDone) statsDone.textContent = allTasks.filter(p => p.status?.startsWith('DONE')).length
+
+  // Usuń z setu zaznaczenia wpisy których już nie ma na liście
+  const visibleIds = new Set(list.map(([id]) => id))
+  atSelected.forEach(id => { if (!visibleIds.has(id)) atSelected.delete(id) })
+  updateAtBulkBar()
 
   if (!list.length) {
     el.innerHTML = '<div class="empty">Brak projektów pasujących do filtrów.</div>'
@@ -1604,11 +1609,15 @@ function renderAirdrop() {
   }
 
   if (atView === 'table') {
+    const allChecked = list.length > 0 && list.every(([id]) => atSelected.has(id))
     el.innerHTML = `
       <div style="overflow-x:auto">
         <table class="at-table">
           <thead>
             <tr>
+              <th style="width:32px;padding:8px 6px 8px 12px">
+                <input type="checkbox" class="at-chk" ${allChecked?'checked':''} onchange="atToggleAll(this.checked)" title="Zaznacz wszystkie">
+              </th>
               <th>Status</th>
               <th>Typ</th>
               <th>Projekt</th>
@@ -1623,7 +1632,10 @@ function renderAirdrop() {
           </thead>
           <tbody>
             ${list.map(([docId, p]) => `
-              <tr class="at-row${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-row-done' : ''}">
+              <tr class="at-row${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-row-done' : ''}${atSelected.has(docId)?' at-row-sel':''}">
+                <td style="padding:7px 6px 7px 12px">
+                  <input type="checkbox" class="at-chk" ${atSelected.has(docId)?'checked':''} onchange="atToggleOne('${docId}',this.checked)">
+                </td>
                 <td>
                   <select class="at-status-sel" style="${atStatusStyle(p.status)}" onchange="setAtStatus('${docId}',this.value)">
                     ${AT_STATUSES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
@@ -1644,8 +1656,8 @@ function renderAirdrop() {
                 <td><div class="at-sm-cell">${p.note||''}</div></td>
                 <td>
                   <div style="display:flex;gap:4px">
-                    <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')">✏️</button>
-                    <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')">✕</button>
+                    <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')" title="Edytuj">✏️</button>
+                    <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')" title="Usuń">✕</button>
                   </div>
                 </td>
               </tr>`).join('')}
@@ -1653,17 +1665,18 @@ function renderAirdrop() {
         </table>
       </div>`
   } else {
-    // Widok kart
+    // Widok kart — checkbox w nagłówku karty
     el.innerHTML = list.map(([docId, p]) => `
-      <div class="at-card${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-card-done' : ''}">
+      <div class="at-card${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-card-done' : ''}${atSelected.has(docId)?' at-card-sel':''}">
         <div class="at-card-head">
+          <input type="checkbox" class="at-chk" ${atSelected.has(docId)?'checked':''} onchange="atToggleOne('${docId}',this.checked)" style="flex-shrink:0">
           <span class="at-card-project">${p.project||'(brak nazwy)'}</span>
           ${p.type ? `<span class="at-type-badge">${p.type}</span>` : ''}
           <select class="at-status-sel" style="${atStatusStyle(p.status)};margin-left:auto" onchange="setAtStatus('${docId}',this.value)">
             ${AT_STATUSES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
           </select>
-          <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')">✏️</button>
-          <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')">✕</button>
+          <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')" title="Edytuj">✏️</button>
+          <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')" title="Usuń">✕</button>
         </div>
         ${p.tasks ? `<div class="at-card-tasks">${p.tasks.replace(/\n/g,'<br>')}</div>` : ''}
         <div class="at-card-foot">
@@ -1676,6 +1689,75 @@ function renderAirdrop() {
         ${p.imgUrl ? `<img src="${p.imgUrl}" class="at-card-img" alt="screenshot" onclick="window.open('${p.imgUrl}','_blank')">` : ''}
       </div>`).join('')
   }
+}
+
+function atToggleOne(docId, checked) {
+  if (checked) atSelected.add(docId)
+  else atSelected.delete(docId)
+  updateAtBulkBar()
+  // Aktualizuj styl wiersza/karty bez pełnego re-renderu
+  const row = document.querySelector(`[data-at-id="${docId}"]`) // fallback
+  const chks = document.querySelectorAll('.at-chk')
+  // Synchronizuj "zaznacz wszystkie" checkbox w nagłówku
+  const allVisible = document.querySelectorAll('tbody .at-chk')
+  const headerChk  = document.querySelector('thead .at-chk')
+  if (headerChk && allVisible.length) {
+    headerChk.checked = [...allVisible].every(c => c.checked)
+    headerChk.indeterminate = !headerChk.checked && [...allVisible].some(c => c.checked)
+  }
+}
+
+function atToggleAll(checked) {
+  // Zaznacz/odznacz wszystkie widoczne
+  document.querySelectorAll('tbody .at-chk').forEach(chk => {
+    chk.checked = checked
+    const tr = chk.closest('tr')
+    if (!tr) return
+    // Wyciągnij docId z onclick deleteAt lub checkbox onchange
+    const oc = chk.getAttribute('onchange') || ''
+    const m  = oc.match(/atToggleOne\('([^']+)'/)
+    if (m) {
+      if (checked) atSelected.add(m[1])
+      else atSelected.delete(m[1])
+    }
+  })
+  // Widok kart
+  document.querySelectorAll('.at-card .at-chk').forEach(chk => {
+    chk.checked = checked
+    const oc = chk.getAttribute('onchange') || ''
+    const m  = oc.match(/atToggleOne\('([^']+)'/)
+    if (m) {
+      if (checked) atSelected.add(m[1])
+      else atSelected.delete(m[1])
+    }
+  })
+  updateAtBulkBar()
+}
+
+function updateAtBulkBar() {
+  const bar   = document.getElementById('at-bulk-bar')
+  const count = document.getElementById('at-bulk-count')
+  if (!bar) return
+  const n = atSelected.size
+  if (n > 0) {
+    bar.style.display = 'flex'
+    if (count) count.textContent = `Zaznaczono: ${n}`
+  } else {
+    bar.style.display = 'none'
+  }
+}
+
+async function deleteAtSelected() {
+  const n = atSelected.size
+  if (!n) return
+  if (!confirm(`Usunąć ${n} zaznaczonych projektów? Tej operacji nie można cofnąć.`)) return
+  const ids = [...atSelected]
+  await Promise.all(ids.map(id => deleteDoc(doc(db, 'airdropTasks', id))))
+  ids.forEach(id => delete airdropTasks[id])
+  atSelected.clear()
+  renderAirdrop()
+  updateBadges()
+  toast(`Usunięto ${n} projektów ✓`)
 }
 
 async function setAtStatus(docId, status) {
@@ -2042,6 +2124,13 @@ function buildApp() {
           <input type="file" accept=".xlsx,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="importAtXlsx(this)">
         </label>
         <span id="at-import-status" style="font-size:12px;color:var(--text3)"></span>
+      </div>
+
+      <!-- Pasek masowych akcji (pojawia się gdy coś zaznaczone) -->
+      <div id="at-bulk-bar" style="display:none;align-items:center;gap:10px;padding:9px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);margin-bottom:10px;flex-wrap:wrap">
+        <span id="at-bulk-count" style="font-size:13px;font-weight:700;color:var(--neon4)"></span>
+        <button class="btn btn-danger" style="font-size:12px;padding:5px 14px" onclick="deleteAtSelected()">🗑 Usuń zaznaczone</button>
+        <button class="btn" style="font-size:12px;padding:5px 14px" onclick="atSelected.clear();renderAirdrop()">✕ Odznacz wszystkie</button>
       </div>
 
       <!-- Filtry -->
@@ -2503,6 +2592,7 @@ Object.assign(window, {
   triggerAIPara,
   toggleManualForm, addManualPost,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
+  atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
