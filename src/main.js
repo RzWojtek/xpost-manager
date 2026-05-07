@@ -1611,14 +1611,18 @@ function renderAirdrop() {
   if (atView === 'table') {
     const allChecked = list.length > 0 && list.every(([id]) => atSelected.has(id))
 
-    // Uniwersalna zwijalna komórka tekstowa
+    // Linkifikuje URL-e w tekście
+    const linkify = t => t.replace(/(https?:\/\/[^\s<]+)/g, u =>
+      `<a href="${u}" target="_blank" class="at-link" title="${u}">${u.replace(/^https?:\/\//,'').slice(0,36)}</a>`)
+
+    // Uniwersalna zwijalna komórka tekstowa (auto-linkuje URL-e)
     const CC = (text, docId, field, maxLen = 60) => {
       if (!text || !text.trim()) return '<span class="at-empty">—</span>'
       const trimmed = text.trim()
       const short   = trimmed.length > maxLen
       const display = short ? trimmed.slice(0, maxLen) + '…' : trimmed
       return `<div class="at-collapsible">
-        <div class="at-cell-inner${short?' at-collapsed':''}" id="atc-${docId}-${field}">${display.replace(/\n/g,'<br>')}</div>
+        <div class="at-cell-inner${short?' at-collapsed':''}" id="atc-${docId}-${field}">${linkify(display).replace(/\n/g,'<br>')}</div>
         ${short ? `<button class="at-expand-btn" onclick="atExpandCell('${docId}','${field}')"><span class="at-expand-icon">▼</span> więcej</button>` : ''}
       </div>`
     }
@@ -1644,7 +1648,21 @@ function renderAirdrop() {
     }
 
     const tableHtml = `
-      <table class="at-table">
+      <table class="at-table" style="width:1460px">
+        <colgroup>
+          <col style="width:36px">
+          <col style="width:46px">
+          <col style="width:160px">
+          <col style="width:100px">
+          <col style="width:130px">
+          <col style="width:200px">
+          <col style="width:80px">
+          <col style="width:160px">
+          <col style="width:180px">
+          <col style="width:110px">
+          <col style="width:180px">
+          <col style="width:78px">
+        </colgroup>
         <thead>
           <tr>
             <th style="width:32px;padding:8px 6px 8px 12px">
@@ -1683,8 +1701,8 @@ function renderAirdrop() {
               </td>
               <td>${CC(p.project, docId, 'project', 30)}</td>
               <td>${CC(p.tasks,   docId, 'tasks',   80)}</td>
-              <td><span class="at-date-cell">${p.date||'—'}</span></td>
-              <td>${CSocial(p.socialLink, docId)}</td>
+              <td>${CC(p.date,   docId, 'date',   20)}</td>
+              <td>${CC(p.socialLink, docId, 'socialLink', 32)}</td>
               <td>${CL(p.testnetLinks, docId)}</td>
               <td>${CC(p.wallet, docId, 'wallet', 20)}</td>
               <td>${CC(p.note,   docId, 'note',   80)}</td>
@@ -1698,24 +1716,10 @@ function renderAirdrop() {
         </tbody>
       </table>`
 
-    // Wrapper z podwójnym scrollbarem — góra i dół
+    // Wrapper ze scrollbarem (sticky header działa przez overflow:auto na .at-table-wrap)
     el.innerHTML = `
       <div class="at-scroll-top-wrap"><div class="at-scroll-top-inner" id="at-scroll-phantom"></div></div>
       <div class="at-table-wrap" id="at-table-wrap">${tableHtml}</div>`
-
-    // Synchronizuj scrollbary góra ↔ dół
-    requestAnimationFrame(() => {
-      const wrap    = document.getElementById('at-table-wrap')
-      const phantom = document.getElementById('at-scroll-phantom')
-      const topWrap = wrap?.previousElementSibling
-      if (!wrap || !phantom || !topWrap) return
-      // Ustaw szerokość phantoma = szerokość tabeli
-      const tbl = wrap.querySelector('table')
-      if (tbl) phantom.style.width = tbl.scrollWidth + 'px'
-      // Sync scroll
-      topWrap.addEventListener('scroll', () => { wrap.scrollLeft = topWrap.scrollLeft })
-      wrap.addEventListener('scroll',    () => { topWrap.scrollLeft = wrap.scrollLeft })
-    })
   } else {
     // Widok kart — checkbox w nagłówku karty
     el.innerHTML = list.map(([docId, p]) => `
@@ -1799,6 +1803,11 @@ function updateAtBulkBar() {
   }
 }
 
+function atLinkify(t) {
+  return (t||'').replace(/(https?:\/\/[^\s<]+)/g, u =>
+    `<a href="${u}" target="_blank" class="at-link" title="${u}">${u.replace(/^https?:\/\//,'').slice(0,36)}</a>`)
+}
+
 function atExpandCell(docId, field) {
   const cell = document.getElementById(`atc-${docId}-${field}`)
   const btn  = cell?.nextElementSibling
@@ -1806,17 +1815,17 @@ function atExpandCell(docId, field) {
   const p = airdropTasks[docId]
   if (!p) return
 
-  const maxLens = { project: 30, tasks: 80, wallet: 20, note: 80 }
+  const maxLens = { project: 30, tasks: 80, wallet: 20, note: 80, date: 20 }
   const maxLen  = maxLens[field] || 80
 
   const isCollapsed = cell.classList.contains('at-collapsed')
   if (isCollapsed) {
-    // Rozwiń
+    // Rozwiń — pełna treść z linkifikacją
     if (field === 'tlinks') {
       cell.innerHTML = (p.testnetLinks||'').split('\n').map(l=>l.trim()).filter(Boolean)
-        .map(l => `<a href="${l}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,32)}</a>`).join('')
+        .map(l => `<a href="${l}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,36)}</a>`).join('')
     } else {
-      cell.innerHTML = (p[field]||'').replace(/\n/g,'<br>')
+      cell.innerHTML = atLinkify(p[field]||'').replace(/\n/g,'<br>')
     }
     cell.classList.remove('at-collapsed')
     if (btn) btn.innerHTML = '<span class="at-expand-icon at-expand-open">▲</span> mniej'
@@ -1825,13 +1834,13 @@ function atExpandCell(docId, field) {
     if (field === 'tlinks') {
       const links = (p.testnetLinks||'').split('\n').map(l=>l.trim()).filter(Boolean)
       cell.innerHTML = links.slice(0,2).map(l =>
-        `<a href="${l}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,32)}</a>`
+        `<a href="${l}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,36)}</a>`
       ).join('')
       cell.classList.add('at-collapsed')
       if (btn) btn.innerHTML = `<span class="at-expand-icon">▼</span> +${links.length-2} więcej`
     } else {
       const text = p[field] || ''
-      cell.innerHTML = text.slice(0, maxLen).replace(/\n/g,'<br>') + (text.length > maxLen ? '…' : '')
+      cell.innerHTML = atLinkify(text.slice(0, maxLen)).replace(/\n/g,'<br>') + (text.length > maxLen ? '…' : '')
       cell.classList.add('at-collapsed')
       if (btn) btn.innerHTML = '<span class="at-expand-icon">▼</span> więcej'
     }
@@ -2688,7 +2697,7 @@ Object.assign(window, {
   triggerAIPara,
   toggleManualForm, addManualPost,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
-  atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, atExpandCell,
+  atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, atExpandCell, atLinkify,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
