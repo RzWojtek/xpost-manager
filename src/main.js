@@ -342,7 +342,8 @@ let atSearch  = ''
 let atStatus  = ''
 let atType    = ''
 let atView    = 'table' // 'table' | 'cards'
-let atSelected = new Set() // zaznaczone docId do masowego usuwania
+let atSelected  = new Set() // zaznaczone docId do masowego usuwania
+let atShowHidden = false     // czy pokazywać ukryte wpisy
 
 // ── UTILS ─────────────────────────────────────────────────────────
 const nowStr = () => new Date().toLocaleString('pl-PL',{hour12:false}).replace(',','')
@@ -1575,6 +1576,7 @@ function renderAirdrop() {
 
   const list = Object.entries(airdropTasks)
     .filter(([,p]) => {
+      if (!atShowHidden && p.hidden) return false   // ukryte domyślnie niewidoczne
       if (atStatus && p.status !== atStatus) return false
       if (atType   && p.type   !== atType)   return false
       if (atSearch) {
@@ -1707,8 +1709,9 @@ function renderAirdrop() {
               <td>${CC(p.wallet, docId, 'wallet', 20)}</td>
               <td>${CC(p.note,   docId, 'note',   80)}</td>
               <td>
-                <div style="display:flex;gap:4px">
+                <div style="display:flex;gap:4px;flex-wrap:nowrap">
                   <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')" title="Edytuj">✏️</button>
+                  <button class="btn ${p.hidden?'btn-success':'btn-info'}" style="font-size:11px;padding:3px 7px" onclick="toggleAtHide('${docId}')" title="${p.hidden?'Pokaż':'Ukryj'}">${p.hidden?'👁':'🙈'}</button>
                   <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')" title="Usuń">✕</button>
                 </div>
               </td>
@@ -1730,6 +1733,7 @@ function renderAirdrop() {
             ${AT_STATUSES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
           </select>
           <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')" title="Edytuj">✏️</button>
+          <button class="btn ${p.hidden?'btn-success':'btn-info'}" style="font-size:11px;padding:3px 7px" onclick="toggleAtHide('${docId}')" title="${p.hidden?'Pokaż':'Ukryj'}">${p.hidden?'👁':'🙈'}</button>
           <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')" title="Usuń">✕</button>
         </div>
         ${p.tasks ? `<div class="at-card-tasks">${p.tasks.replace(/\n/g,'<br>')}</div>` : ''}
@@ -1843,6 +1847,35 @@ function atExpandCell(docId, field) {
       if (btn) btn.innerHTML = '<span class="at-expand-icon">▼</span> więcej'
     }
   }
+}
+
+async function toggleAtHide(docId) {
+  if (!airdropTasks[docId]) return
+  const hidden = !airdropTasks[docId].hidden
+  airdropTasks[docId].hidden = hidden
+  await updateDoc(doc(db, 'airdropTasks', docId), { hidden })
+  renderAirdrop()
+  toast(hidden ? '🙈 Ukryto wpis' : '👁 Pokazano wpis')
+}
+
+async function hideAtSelected() {
+  const n = atSelected.size
+  if (!n) return
+  const ids = [...atSelected]
+  await Promise.all(ids.map(id => {
+    airdropTasks[id].hidden = true
+    return updateDoc(doc(db, 'airdropTasks', id), { hidden: true })
+  }))
+  atSelected.clear()
+  renderAirdrop()
+  toast(`🙈 Ukryto ${n} wpisów`)
+}
+
+function toggleAtShowHidden() {
+  atShowHidden = !atShowHidden
+  const btn = document.getElementById('btn-show-hidden')
+  if (btn) btn.textContent = atShowHidden ? '🙈 Ukryj schowane' : '👁 Pokaż ukryte'
+  renderAirdrop()
 }
 
 async function deleteAtSelected() {
@@ -2217,13 +2250,14 @@ function buildApp() {
       </div>
 
       <!-- Pasek narzędzi -->
-      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-primary" id="btn-add-at" onclick="toggleAtForm()" style="white-space:nowrap">+ Dodaj projekt</button>
-        <div style="display:flex;gap:2px;border:1px solid var(--border2);border-radius:var(--r);overflow:hidden">
-          <button class="at-view-btn active" data-view="table" onclick="toggleAtView('table')" style="padding:6px 14px;font-size:12px;border:none;background:var(--bg3);color:var(--text);cursor:pointer;font-family:inherit">☰ Tabela</button>
-          <button class="at-view-btn" data-view="cards" onclick="toggleAtView('cards')" style="padding:6px 14px;font-size:12px;border:none;background:transparent;color:var(--text2);cursor:pointer;font-family:inherit">▦ Karty</button>
+        <div style="display:flex;gap:0;border:1px solid var(--border2);border-radius:var(--r);overflow:hidden;flex-shrink:0">
+          <button class="at-view-btn active" data-view="table" onclick="toggleAtView('table')" style="padding:5px 12px;font-size:12px;border:none;background:var(--bg3);color:var(--text);cursor:pointer;font-family:inherit;white-space:nowrap">☰ Tabela</button>
+          <button class="at-view-btn" data-view="cards" onclick="toggleAtView('cards')" style="padding:5px 12px;font-size:12px;border:none;background:transparent;color:var(--text2);cursor:pointer;font-family:inherit;white-space:nowrap;border-left:1px solid var(--border2)">▦ Karty</button>
         </div>
-        <label class="btn" style="cursor:pointer;position:relative;white-space:nowrap">
+        <button class="btn" id="btn-show-hidden" onclick="toggleAtShowHidden()" style="white-space:nowrap">👁 Pokaż ukryte</button>
+        <label class="btn" style="cursor:pointer;position:relative;white-space:nowrap;flex-shrink:0">
           📥 Import .xlsx
           <input type="file" accept=".xlsx,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="importAtXlsx(this)">
         </label>
@@ -2231,10 +2265,11 @@ function buildApp() {
       </div>
 
       <!-- Pasek masowych akcji (pojawia się gdy coś zaznaczone) -->
-      <div id="at-bulk-bar" style="display:none;align-items:center;gap:10px;padding:9px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);margin-bottom:10px;flex-wrap:wrap">
+      <div id="at-bulk-bar" style="display:none;align-items:center;gap:8px;padding:9px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);margin-bottom:10px;flex-wrap:wrap">
         <span id="at-bulk-count" style="font-size:13px;font-weight:700;color:var(--neon4)"></span>
-        <button class="btn btn-danger" style="font-size:12px;padding:5px 14px" onclick="deleteAtSelected()">🗑 Usuń zaznaczone</button>
-        <button class="btn" style="font-size:12px;padding:5px 14px" onclick="atSelected.clear();renderAirdrop()">✕ Odznacz wszystkie</button>
+        <button class="btn btn-info" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="hideAtSelected()">🙈 Ukryj zaznaczone</button>
+        <button class="btn btn-danger" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="deleteAtSelected()">🗑 Usuń zaznaczone</button>
+        <button class="btn" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="atSelected.clear();renderAirdrop()">✕ Odznacz</button>
       </div>
 
       <!-- Filtry -->
@@ -2697,7 +2732,7 @@ Object.assign(window, {
   triggerAIPara,
   toggleManualForm, addManualPost,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
-  atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, atExpandCell, atLinkify,
+  atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
