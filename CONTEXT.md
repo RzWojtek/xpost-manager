@@ -482,6 +482,70 @@ VITE_SAMBANOVA_API_KEY        ← AI Parafraza (model 4)
 VITE_OPENROUTER_API_KEY       ← AI Parafraza (modele 5 i 6)
 ```
 
+## Zakładka 🪂 Projekty (Airdrop/Testnet tracker)
+
+Dodano nową zakładkę **"🪂 Projekty"** między "✍ Dodaj ręcznie" a "Więcej ▾".
+
+### Firebase
+- Nowa kolekcja: `airdropTasks`
+- Pola dokumentu: `id`, `excelRow`, `status`, `type`, `project`, `tasks`, `date`, `socialLink`, `testnetLinks`, `wallet`, `imgUrl`, `note`, `hidden`, `addedAt`
+
+### Struktura pól (odpowiednik kolumn Excel)
+| Pole | Opis |
+|------|------|
+| `excelRow` | Numer wiersza z Excela (A-kolumna z numerami 1, 2600, 2601...) — zachowany przy imporcie |
+| `status` | TODO / DONE na 1 koncie / DONE na 3 walletach / DONE na 3 kontach gmail / DONE na 5 walletach / Pominięty |
+| `type` | Testnet / Mainnet / WL / Airdrop / Inne |
+| `project` | Nazwa projektu |
+| `tasks` | Co robiłeś (multi-line) |
+| `date` | Data działań |
+| `socialLink` | Link do socjali (Twitter, Discord...) |
+| `testnetLinks` | Linki do testnet/działań — każdy w nowej linii |
+| `wallet` | Portfel (Rabby, Phantom, Unisat...) |
+| `imgUrl` | URL screenshota |
+| `note` | Notatka |
+| `hidden` | bool — ukryty wpis (nie pokazywany domyślnie, ale nie usunięty) |
+
+### Sortowanie
+Malejąco po `excelRow` (najwyższy numer = najnowszy = na górze). Wpisy dodane ręcznie dostają `max(excelRow) + 1` automatycznie.
+
+### Widoki
+- **Tabela** (domyślny) — `table-layout:fixed`, szerokość 1460px, wykracza poza `max-width:1140px` przez `margin:0 -1rem` na `#page-airdrop`
+- **Karty** — przełącznik ☰/▦ w toolbarze
+- Sticky nagłówki kolumn (`thead position:sticky`) działają przez `overflow:auto` na `.at-table-outer` z `max-height:72vh`
+
+### Zwijane komórki
+Wszystkie kolumny tekstowe zwijają się do limitu znaków. Przycisk rozwinięcia to cyjanowa pigułka `▼ więcej` / `▲ mniej`. Funkcje: `CC()` (tekst, auto-linkuje URL-e), `CL()` (lista linków), `atExpandCell(docId, field)`.
+
+Limity: `project`=30, `tasks`=80, `date`=20, `socialLink`=32, `testnetLinks`=2 linki, `wallet`=20, `note`=80.
+
+### Import z Excel (.xlsx)
+- Przycisk "📥 Import .xlsx" — ładuje SheetJS z CDN lazy-load
+- Pobiera dane z pierwszego arkusza (`SheetNames[0]`), wiersz 1 = nagłówek (pomijany)
+- Kolejność kolumn w pliku: A=status, B=typ, C=projekt, D=zadania, E=data, F=link socjali, G=linki testnet, H=portfel, I=notatka
+- `excelRow` = numer wiersza (i+1), zachowuje oryginalne numery z Excela
+
+### Zaznaczanie i akcje masowe
+- Checkbox przy każdym wierszu + "zaznacz wszystkie" w nagłówku (z `indeterminate`)
+- Bulk bar pojawia się gdy coś zaznaczone: **🙈 Ukryj zaznaczone** | **🗑 Usuń zaznaczone** | **✕ Odznacz**
+- `atSelected` = `Set` z docId
+
+### Ukrywanie wpisów
+- Przycisk 🙈 przy każdym wierszu — ustawia `hidden:true` w Firebase, wpis znika z listy (nie jest usunięty)
+- Przycisk "👁 Pokaż ukryte" w toolbarze przełącza `atShowHidden` (bool, stan w pamięci)
+- `toggleAtHide(docId)`, `hideAtSelected()`, `toggleAtShowHidden()`
+
+### Filtry
+- Wyszukiwarka tekstowa (projekt, zadania, notatka, portfel)
+- Dropdown statusu
+- Dropdown typu
+
+### Funkcje JS (wszystkie w `window`)
+`renderAirdrop`, `toggleAtView`, `toggleAtForm`, `openAtEdit`, `saveAt`, `deleteAt`, `setAtStatus`, `setAtField`, `importAtXlsx`, `atToggleOne`, `atToggleAll`, `updateAtBulkBar`, `deleteAtSelected`, `hideAtSelected`, `toggleAtHide`, `toggleAtShowHidden`, `atExpandCell`, `atLinkify`
+
+### CSS (style.css)
+Nowe klasy: `.at-table-outer`, `.at-page-inner`, `.at-table`, `.at-table thead`, `.at-table th/td`, `.at-row`, `.at-row-done`, `.at-row-sel`, `.at-card`, `.at-card-done`, `.at-card-sel`, `.at-card-head/tasks/foot/img`, `.at-collapsible`, `.at-cell-inner`, `.at-collapsed`, `.at-expand-btn`, `.at-expand-icon`, `.at-status-sel`, `.at-type-sel`, `.at-num-cell`, `.at-empty`, `.at-link`, `.at-type-badge`, `.at-view-btn`, `.at-chk`
+
 ---
 
 ## PROMPT STARTOWY
