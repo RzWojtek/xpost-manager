@@ -245,7 +245,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .subpage{display:none}
 .subpage.active{display:block}
 
-/* AIRDROP TABLE */
+/* AIRDROP TABLE — dual scrollbar wrapper */
+.at-scroll-top-wrap{overflow-x:auto;overflow-y:hidden;height:12px;margin-bottom:2px}
+.at-scroll-top-inner{height:1px}
+.at-table-wrap{overflow-x:auto;overflow-y:visible}
 .at-table{width:100%;border-collapse:collapse;font-size:12px}
 .at-table th{background:var(--bg3);color:var(--text3);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;text-align:left;white-space:nowrap;border-bottom:2px solid var(--border2);position:sticky;top:0;z-index:2}
 .at-table td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
@@ -255,13 +258,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .at-status-sel{font-size:11px;padding:3px 7px;border-radius:4px;border:1px solid var(--border2);cursor:pointer;font-family:inherit;font-weight:700;white-space:nowrap;max-width:170px}
 .at-type-sel{font-size:11px;padding:3px 7px;border-radius:4px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);cursor:pointer;font-family:inherit;min-width:90px}
 .at-status-sel:focus,.at-type-sel:focus{outline:none;border-color:var(--neon)}
+.at-num-cell{font-size:11px;color:var(--text3);font-weight:700;text-align:center;min-width:28px}
 .at-project-cell{font-weight:700;color:var(--text);min-width:110px;max-width:180px;word-break:break-word}
-.at-tasks-cell{font-size:12px;color:var(--text2);line-height:1.5;min-width:140px;max-width:260px;word-break:break-word}
-.at-sm-cell{font-size:11px;color:var(--text3);min-width:70px;max-width:120px;word-break:break-word}
+.at-sm-cell{font-size:11px;color:var(--text3);min-width:60px;max-width:120px;word-break:break-word}
 .at-link-cell{min-width:90px;max-width:160px}
 .at-links-cell{min-width:110px;max-width:200px}
 .at-link{font-size:11px;color:var(--neon);text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 0}
 .at-link:hover{text-decoration:underline}
+
+/* Zwijane komórki */
+.at-collapsible{min-width:80px;max-width:210px}
+.at-cell-inner{font-size:12px;color:var(--text2);line-height:1.5;word-break:break-word}
+.at-collapsed{max-height:3.6em;overflow:hidden}
+.at-empty{font-size:11px;color:var(--text3)}
+.at-date-cell{font-size:11px;color:var(--text3);white-space:nowrap}
+.at-expand-btn{display:inline-flex;align-items:center;gap:3px;margin-top:4px;font-size:10px;font-weight:600;color:var(--bg);background:var(--neon);border:none;border-radius:10px;padding:2px 8px;cursor:pointer;font-family:inherit;white-space:nowrap;opacity:.85;transition:opacity .15s,transform .1s;line-height:1.6}
+.at-expand-btn:hover{opacity:1;transform:translateY(-1px)}
+.at-expand-btn:active{transform:translateY(0)}
+.at-expand-icon{font-size:9px;line-height:1}
 
 /* AIRDROP CARDS */
 .at-card{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);overflow:hidden;margin-bottom:10px;transition:border-color .15s}

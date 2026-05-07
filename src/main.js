@@ -1610,26 +1610,37 @@ function renderAirdrop() {
 
   if (atView === 'table') {
     const allChecked = list.length > 0 && list.every(([id]) => atSelected.has(id))
-    // Funkcja generująca skróconą treść komórki z przyciskiem rozwinięcia
-    const collapsibleCell = (text, docId, field, maxLen = 80) => {
-      if (!text) return '<div class="at-sm-cell">—</div>'
-      const short = text.length > maxLen
-      const html  = text.replace(/\n/g, '<br>')
-      const shortHtml = short ? text.slice(0, maxLen).replace(/\n/g, '<br>') + '…' : html
+
+    // Uniwersalna zwijalna komórka tekstowa
+    const CC = (text, docId, field, maxLen = 60) => {
+      if (!text || !text.trim()) return '<span class="at-empty">—</span>'
+      const trimmed = text.trim()
+      const short   = trimmed.length > maxLen
+      const display = short ? trimmed.slice(0, maxLen) + '…' : trimmed
       return `<div class="at-collapsible">
-        <div class="at-cell-inner at-collapsed" id="atc-${docId}-${field}">${shortHtml}</div>
-        ${short ? `<button class="at-expand-btn" onclick="atExpandCell('${docId}','${field}')">▶ więcej</button>` : ''}
+        <div class="at-cell-inner${short?' at-collapsed':''}" id="atc-${docId}-${field}">${display.replace(/\n/g,'<br>')}</div>
+        ${short ? `<button class="at-expand-btn" onclick="atExpandCell('${docId}','${field}')"><span class="at-expand-icon">▼</span> więcej</button>` : ''}
       </div>`
     }
-    const collapsibleLinks = (text, docId) => {
-      if (!text) return '<div class="at-sm-cell">—</div>'
-      const links = text.split('\n').filter(Boolean)
-      const short = links.length > 2
-      const renderLinks = (arr) => arr.map(l => `<a href="${l.trim()}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,30)}</a>`).join('')
+
+    // Zwijalna komórka z linkami
+    const CL = (text, docId) => {
+      if (!text || !text.trim()) return '<span class="at-empty">—</span>'
+      const links = text.split('\n').map(l=>l.trim()).filter(Boolean)
+      const short  = links.length > 2
+      const renderL = arr => arr.map(l =>
+        `<a href="${l}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,32)}</a>`
+      ).join('')
       return `<div class="at-collapsible">
-        <div class="at-cell-inner at-collapsed" id="atc-${docId}-tlinks">${renderLinks(short ? links.slice(0,2) : links)}</div>
-        ${short ? `<button class="at-expand-btn" onclick="atExpandCell('${docId}','tlinks')">▶ +${links.length-2} więcej</button>` : ''}
+        <div class="at-cell-inner${short?' at-collapsed':''}" id="atc-${docId}-tlinks">${renderL(short ? links.slice(0,2) : links)}</div>
+        ${short ? `<button class="at-expand-btn" onclick="atExpandCell('${docId}','tlinks')"><span class="at-expand-icon">▼</span> +${links.length-2} więcej</button>` : ''}
       </div>`
+    }
+
+    // Zwijalna komórka z pojedynczym linkiem socjali
+    const CSocial = (url, docId) => {
+      if (!url) return '<span class="at-empty">—</span>'
+      return `<a href="${url}" target="_blank" class="at-link" title="${url}">${url.replace(/^https?:\/\//,'').slice(0,32)}</a>`
     }
 
     const tableHtml = `
@@ -1670,13 +1681,13 @@ function renderAirdrop() {
                   ${AT_TYPES.map(t=>`<option${t===p.type?' selected':''}>${t}</option>`).join('')}
                 </select>
               </td>
-              <td><div class="at-project-cell" title="${p.project||''}">${p.project||'—'}</div></td>
-              <td>${collapsibleCell(p.tasks, docId, 'tasks', 70)}</td>
-              <td><div class="at-sm-cell">${p.date||'—'}</div></td>
-              <td><div class="at-link-cell">${p.socialLink ? `<a href="${p.socialLink}" target="_blank" class="at-link" title="${p.socialLink}">${p.socialLink.replace(/^https?:\/\//,'').slice(0,28)}</a>` : '—'}</div></td>
-              <td>${collapsibleLinks(p.testnetLinks, docId)}</td>
-              <td><div class="at-sm-cell">${p.wallet||'—'}</div></td>
-              <td>${collapsibleCell(p.note, docId, 'note', 60)}</td>
+              <td>${CC(p.project, docId, 'project', 30)}</td>
+              <td>${CC(p.tasks,   docId, 'tasks',   80)}</td>
+              <td><span class="at-date-cell">${p.date||'—'}</span></td>
+              <td>${CSocial(p.socialLink, docId)}</td>
+              <td>${CL(p.testnetLinks, docId)}</td>
+              <td>${CC(p.wallet, docId, 'wallet', 20)}</td>
+              <td>${CC(p.note,   docId, 'note',   80)}</td>
               <td>
                 <div style="display:flex;gap:4px">
                   <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')" title="Edytuj">✏️</button>
@@ -1792,34 +1803,38 @@ function atExpandCell(docId, field) {
   const cell = document.getElementById(`atc-${docId}-${field}`)
   const btn  = cell?.nextElementSibling
   if (!cell) return
+  const p = airdropTasks[docId]
+  if (!p) return
+
+  const maxLens = { project: 30, tasks: 80, wallet: 20, note: 80 }
+  const maxLen  = maxLens[field] || 80
+
   const isCollapsed = cell.classList.contains('at-collapsed')
   if (isCollapsed) {
-    // Rozwiń — pokaż pełną treść
-    const p = airdropTasks[docId]
-    if (!p) return
+    // Rozwiń
     if (field === 'tlinks') {
-      cell.innerHTML = (p.testnetLinks||'').split('\n').filter(Boolean)
-        .map(l => `<a href="${l.trim()}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,30)}</a>`).join('')
+      cell.innerHTML = (p.testnetLinks||'').split('\n').map(l=>l.trim()).filter(Boolean)
+        .map(l => `<a href="${l}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,32)}</a>`).join('')
     } else {
       cell.innerHTML = (p[field]||'').replace(/\n/g,'<br>')
     }
     cell.classList.remove('at-collapsed')
-    if (btn) btn.textContent = '▼ mniej'
+    if (btn) btn.innerHTML = '<span class="at-expand-icon at-expand-open">▲</span> mniej'
   } else {
     // Zwiń
-    const p = airdropTasks[docId]
-    if (!p) return
     if (field === 'tlinks') {
-      const links = (p.testnetLinks||'').split('\n').filter(Boolean)
-      cell.innerHTML = links.slice(0,2).map(l => `<a href="${l.trim()}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,30)}</a>`).join('')
+      const links = (p.testnetLinks||'').split('\n').map(l=>l.trim()).filter(Boolean)
+      cell.innerHTML = links.slice(0,2).map(l =>
+        `<a href="${l}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,32)}</a>`
+      ).join('')
+      cell.classList.add('at-collapsed')
+      if (btn) btn.innerHTML = `<span class="at-expand-icon">▼</span> +${links.length-2} więcej`
     } else {
       const text = p[field] || ''
-      cell.innerHTML = text.slice(0, field === 'note' ? 60 : 70).replace(/\n/g,'<br>') + (text.length > (field === 'note' ? 60 : 70) ? '…' : '')
+      cell.innerHTML = text.slice(0, maxLen).replace(/\n/g,'<br>') + (text.length > maxLen ? '…' : '')
+      cell.classList.add('at-collapsed')
+      if (btn) btn.innerHTML = '<span class="at-expand-icon">▼</span> więcej'
     }
-    cell.classList.add('at-collapsed')
-    if (btn) btn.textContent = field === 'tlinks'
-      ? `▶ +${(p.testnetLinks||'').split('\n').filter(Boolean).length - 2} więcej`
-      : '▶ więcej'
   }
 }
 
