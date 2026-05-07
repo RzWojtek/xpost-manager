@@ -1584,9 +1584,9 @@ function renderAirdrop() {
       return true
     })
     .sort(([,a],[,b]) => {
-      const aD = a.status?.startsWith('DONE') || a.status === 'Pominięty'
-      const bD = b.status?.startsWith('DONE') || b.status === 'Pominięty'
-      if (aD !== bD) return aD ? 1 : -1
+      const aR = a.excelRow || 0
+      const bR = b.excelRow || 0
+      if (bR !== aR) return bR - aR
       return (b.addedAt||'').localeCompare(a.addedAt||'')
     })
 
@@ -1610,60 +1610,101 @@ function renderAirdrop() {
 
   if (atView === 'table') {
     const allChecked = list.length > 0 && list.every(([id]) => atSelected.has(id))
-    el.innerHTML = `
-      <div style="overflow-x:auto">
-        <table class="at-table">
-          <thead>
-            <tr>
-              <th style="width:32px;padding:8px 6px 8px 12px">
-                <input type="checkbox" class="at-chk" ${allChecked?'checked':''} onchange="atToggleAll(this.checked)" title="Zaznacz wszystkie">
-              </th>
-              <th>Status</th>
-              <th>Typ</th>
-              <th>Projekt</th>
-              <th>Zadania</th>
-              <th>Data</th>
-              <th>Link socjali</th>
-              <th>Linki testnet</th>
-              <th>Portfel</th>
-              <th>Notatka</th>
-              <th>Akcje</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${list.map(([docId, p]) => `
-              <tr class="at-row${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-row-done' : ''}${atSelected.has(docId)?' at-row-sel':''}">
-                <td style="padding:7px 6px 7px 12px">
-                  <input type="checkbox" class="at-chk" ${atSelected.has(docId)?'checked':''} onchange="atToggleOne('${docId}',this.checked)">
-                </td>
-                <td>
-                  <select class="at-status-sel" style="${atStatusStyle(p.status)}" onchange="setAtStatus('${docId}',this.value)">
-                    ${AT_STATUSES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
-                  </select>
-                </td>
-                <td>
-                  <select class="at-type-sel" onchange="setAtField('${docId}','type',this.value)">
-                    <option value="">—</option>
-                    ${AT_TYPES.map(t=>`<option${t===p.type?' selected':''}>${t}</option>`).join('')}
-                  </select>
-                </td>
-                <td><div class="at-project-cell" title="${p.project||''}">${p.project||'—'}</div></td>
-                <td><div class="at-tasks-cell">${(p.tasks||'').replace(/\n/g,'<br>')}</div></td>
-                <td><div class="at-sm-cell">${p.date||''}</div></td>
-                <td><div class="at-link-cell">${p.socialLink ? `<a href="${p.socialLink}" target="_blank" class="at-link" title="${p.socialLink}">${p.socialLink.replace(/^https?:\/\//,'').slice(0,30)}</a>` : ''}</div></td>
-                <td><div class="at-links-cell">${(p.testnetLinks||'').split('\n').filter(Boolean).map(l=>`<a href="${l.trim()}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,28)}</a>`).join('<br>')}</div></td>
-                <td><div class="at-sm-cell">${p.wallet||''}</div></td>
-                <td><div class="at-sm-cell">${p.note||''}</div></td>
-                <td>
-                  <div style="display:flex;gap:4px">
-                    <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')" title="Edytuj">✏️</button>
-                    <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')" title="Usuń">✕</button>
-                  </div>
-                </td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
+    // Funkcja generująca skróconą treść komórki z przyciskiem rozwinięcia
+    const collapsibleCell = (text, docId, field, maxLen = 80) => {
+      if (!text) return '<div class="at-sm-cell">—</div>'
+      const short = text.length > maxLen
+      const html  = text.replace(/\n/g, '<br>')
+      const shortHtml = short ? text.slice(0, maxLen).replace(/\n/g, '<br>') + '…' : html
+      return `<div class="at-collapsible">
+        <div class="at-cell-inner at-collapsed" id="atc-${docId}-${field}">${shortHtml}</div>
+        ${short ? `<button class="at-expand-btn" onclick="atExpandCell('${docId}','${field}')">▶ więcej</button>` : ''}
       </div>`
+    }
+    const collapsibleLinks = (text, docId) => {
+      if (!text) return '<div class="at-sm-cell">—</div>'
+      const links = text.split('\n').filter(Boolean)
+      const short = links.length > 2
+      const renderLinks = (arr) => arr.map(l => `<a href="${l.trim()}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,30)}</a>`).join('')
+      return `<div class="at-collapsible">
+        <div class="at-cell-inner at-collapsed" id="atc-${docId}-tlinks">${renderLinks(short ? links.slice(0,2) : links)}</div>
+        ${short ? `<button class="at-expand-btn" onclick="atExpandCell('${docId}','tlinks')">▶ +${links.length-2} więcej</button>` : ''}
+      </div>`
+    }
+
+    const tableHtml = `
+      <table class="at-table">
+        <thead>
+          <tr>
+            <th style="width:32px;padding:8px 6px 8px 12px">
+              <input type="checkbox" class="at-chk" ${allChecked?'checked':''} onchange="atToggleAll(this.checked)" title="Zaznacz wszystkie">
+            </th>
+            <th style="width:42px">#</th>
+            <th>Status</th>
+            <th>Typ</th>
+            <th>Projekt</th>
+            <th>Zadania</th>
+            <th>Data</th>
+            <th>Link socjali</th>
+            <th>Linki testnet</th>
+            <th>Portfel</th>
+            <th>Notatka</th>
+            <th>Akcje</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${list.map(([docId, p]) => `
+            <tr class="at-row${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-row-done' : ''}${atSelected.has(docId)?' at-row-sel':''}">
+              <td style="padding:7px 6px 7px 12px">
+                <input type="checkbox" class="at-chk" ${atSelected.has(docId)?'checked':''} onchange="atToggleOne('${docId}',this.checked)">
+              </td>
+              <td><div class="at-num-cell">${p.excelRow||'—'}</div></td>
+              <td>
+                <select class="at-status-sel" style="${atStatusStyle(p.status)}" onchange="setAtStatus('${docId}',this.value)">
+                  ${AT_STATUSES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
+                </select>
+              </td>
+              <td>
+                <select class="at-type-sel" onchange="setAtField('${docId}','type',this.value)">
+                  <option value="">—</option>
+                  ${AT_TYPES.map(t=>`<option${t===p.type?' selected':''}>${t}</option>`).join('')}
+                </select>
+              </td>
+              <td><div class="at-project-cell" title="${p.project||''}">${p.project||'—'}</div></td>
+              <td>${collapsibleCell(p.tasks, docId, 'tasks', 70)}</td>
+              <td><div class="at-sm-cell">${p.date||'—'}</div></td>
+              <td><div class="at-link-cell">${p.socialLink ? `<a href="${p.socialLink}" target="_blank" class="at-link" title="${p.socialLink}">${p.socialLink.replace(/^https?:\/\//,'').slice(0,28)}</a>` : '—'}</div></td>
+              <td>${collapsibleLinks(p.testnetLinks, docId)}</td>
+              <td><div class="at-sm-cell">${p.wallet||'—'}</div></td>
+              <td>${collapsibleCell(p.note, docId, 'note', 60)}</td>
+              <td>
+                <div style="display:flex;gap:4px">
+                  <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')" title="Edytuj">✏️</button>
+                  <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')" title="Usuń">✕</button>
+                </div>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`
+
+    // Wrapper z podwójnym scrollbarem — góra i dół
+    el.innerHTML = `
+      <div class="at-scroll-top-wrap"><div class="at-scroll-top-inner" id="at-scroll-phantom"></div></div>
+      <div class="at-table-wrap" id="at-table-wrap">${tableHtml}</div>`
+
+    // Synchronizuj scrollbary góra ↔ dół
+    requestAnimationFrame(() => {
+      const wrap    = document.getElementById('at-table-wrap')
+      const phantom = document.getElementById('at-scroll-phantom')
+      const topWrap = wrap?.previousElementSibling
+      if (!wrap || !phantom || !topWrap) return
+      // Ustaw szerokość phantoma = szerokość tabeli
+      const tbl = wrap.querySelector('table')
+      if (tbl) phantom.style.width = tbl.scrollWidth + 'px'
+      // Sync scroll
+      topWrap.addEventListener('scroll', () => { wrap.scrollLeft = topWrap.scrollLeft })
+      wrap.addEventListener('scroll',    () => { topWrap.scrollLeft = wrap.scrollLeft })
+    })
   } else {
     // Widok kart — checkbox w nagłówku karty
     el.innerHTML = list.map(([docId, p]) => `
@@ -1744,6 +1785,41 @@ function updateAtBulkBar() {
     if (count) count.textContent = `Zaznaczono: ${n}`
   } else {
     bar.style.display = 'none'
+  }
+}
+
+function atExpandCell(docId, field) {
+  const cell = document.getElementById(`atc-${docId}-${field}`)
+  const btn  = cell?.nextElementSibling
+  if (!cell) return
+  const isCollapsed = cell.classList.contains('at-collapsed')
+  if (isCollapsed) {
+    // Rozwiń — pokaż pełną treść
+    const p = airdropTasks[docId]
+    if (!p) return
+    if (field === 'tlinks') {
+      cell.innerHTML = (p.testnetLinks||'').split('\n').filter(Boolean)
+        .map(l => `<a href="${l.trim()}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,30)}</a>`).join('')
+    } else {
+      cell.innerHTML = (p[field]||'').replace(/\n/g,'<br>')
+    }
+    cell.classList.remove('at-collapsed')
+    if (btn) btn.textContent = '▼ mniej'
+  } else {
+    // Zwiń
+    const p = airdropTasks[docId]
+    if (!p) return
+    if (field === 'tlinks') {
+      const links = (p.testnetLinks||'').split('\n').filter(Boolean)
+      cell.innerHTML = links.slice(0,2).map(l => `<a href="${l.trim()}" target="_blank" class="at-link" title="${l}">${l.replace(/^https?:\/\//,'').slice(0,30)}</a>`).join('')
+    } else {
+      const text = p[field] || ''
+      cell.innerHTML = text.slice(0, field === 'note' ? 60 : 70).replace(/\n/g,'<br>') + (text.length > (field === 'note' ? 60 : 70) ? '…' : '')
+    }
+    cell.classList.add('at-collapsed')
+    if (btn) btn.textContent = field === 'tlinks'
+      ? `▶ +${(p.testnetLinks||'').split('\n').filter(Boolean).length - 2} więcej`
+      : '▶ więcej'
   }
 }
 
@@ -1849,11 +1925,15 @@ async function saveAt() {
   if (!project && !tasks) { toast('Wpisz nazwę projektu lub zadania!'); return }
 
   const docId = editId || ('at_' + uid())
-  const entry = { id: docId, status, type, project, tasks, date, socialLink: social, testnetLinks: testnet, wallet, imgUrl, note, addedAt: nowStr() }
+  // Nowy wpis — przypisz kolejny numer (max istniejący + 1)
+  const nextRow = editId
+    ? (airdropTasks[editId]?.excelRow || undefined)
+    : (Math.max(0, ...Object.values(airdropTasks).map(p => p.excelRow || 0)) + 1)
+  const entry = { id: docId, excelRow: nextRow, status, type, project, tasks, date, socialLink: social, testnetLinks: testnet, wallet, imgUrl, note, addedAt: nowStr() }
 
   if (editId) {
-    // zachowaj oryginalne addedAt
-    entry.addedAt = airdropTasks[editId]?.addedAt || nowStr()
+    entry.addedAt  = airdropTasks[editId]?.addedAt || nowStr()
+    entry.excelRow = airdropTasks[editId]?.excelRow || nextRow
   }
 
   await setDoc(doc(db, 'airdropTasks', docId), entry)
@@ -1899,6 +1979,7 @@ async function importAtXlsx(input) {
         const docId = 'at_' + uid()
         const entry = {
           id: docId,
+          excelRow:     i + 1,  // numer wiersza z Excela (wiersz 1 = nagłówek, więc dane od wiersza 2)
           status:       String(r[0] || 'TODO').trim() || 'TODO',
           type:         String(r[1] || '').trim(),
           project,
@@ -2592,7 +2673,7 @@ Object.assign(window, {
   triggerAIPara,
   toggleManualForm, addManualPost,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
-  atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected,
+  atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, atExpandCell,
 })
 
 // ── INIT ──────────────────────────────────────────────────────────
