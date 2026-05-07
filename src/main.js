@@ -1716,10 +1716,8 @@ function renderAirdrop() {
         </tbody>
       </table>`
 
-    // Wrapper ze scrollbarem (sticky header działa przez overflow:auto na .at-table-wrap)
     el.innerHTML = `
-      <div class="at-scroll-top-wrap"><div class="at-scroll-top-inner" id="at-scroll-phantom"></div></div>
-      <div class="at-table-wrap" id="at-table-wrap">${tableHtml}</div>`
+      <div class="at-table-outer" id="at-table-wrap">${tableHtml}</div>`
   } else {
     // Widok kart — checkbox w nagłówku karty
     el.innerHTML = list.map(([docId, p]) => `
@@ -2210,6 +2208,7 @@ function buildApp() {
 
     <!-- PROJEKTY AIRDROP/TESTNET -->
     <div id="page-airdrop" class="page">
+      <div class="at-page-inner">
       <!-- Statystyki -->
       <div class="stats" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:14px">
         <div class="stat"><div class="stat-n" id="at-stats-all"  style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
@@ -2321,7 +2320,8 @@ function buildApp() {
       </div>
 
       <!-- Treść tabeli / karty -->
-      <div id="airdrop-content"><div class="loading">Ładowanie...</div></div>
+      </div><!-- /at-page-inner -->
+      <div id="airdrop-content" style="padding:0 1rem"><div class="loading">Ładowanie...</div></div>
     </div>
 
     <!-- WIĘCEJ (mega-zakładka z podzakładkami) -->

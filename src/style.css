@@ -246,23 +246,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .subpage.active{display:block}
 
 /* AIRDROP TABLE — dual scrollbar wrapper */
-.at-scroll-top-wrap{overflow-x:auto;overflow-y:hidden;height:12px;margin-bottom:2px}
+.at-scroll-top-wrap{display:none}
 .at-scroll-top-inner{height:1px}
-.at-table-wrap{overflow-x:auto;overflow-y:visible}
-.at-table{width:max-content;min-width:100%;border-collapse:collapse;font-size:12px}
-.at-table th:nth-child(1){width:36px}   /* checkbox */
-.at-table th:nth-child(2){width:46px}   /* # */
-.at-table th:nth-child(3){width:160px}  /* status */
-.at-table th:nth-child(4){width:100px}  /* typ */
-.at-table th:nth-child(5){width:130px}  /* projekt */
-.at-table th:nth-child(6){width:180px}  /* zadania */
-.at-table th:nth-child(7){width:80px}   /* data */
-.at-table th:nth-child(8){width:160px}  /* socjale */
-.at-table th:nth-child(9){width:160px}  /* testnet */
-.at-table th:nth-child(10){width:100px} /* portfel */
-.at-table th:nth-child(11){width:180px} /* notatka */
-.at-table th:nth-child(12){width:80px}  /* akcje */
-.at-table th{background:var(--bg3);color:var(--text3);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;text-align:left;white-space:nowrap;border-bottom:2px solid var(--border2);position:sticky;top:0;z-index:2}
+#page-airdrop{margin:0 -1rem}
+.at-page-inner{padding:0 1rem}
+.at-table-outer{overflow-x:auto;overflow-y:auto;max-height:72vh;border-top:1px solid var(--border2);border-bottom:1px solid var(--border2);scrollbar-width:thin;scrollbar-color:var(--border3) var(--bg2)}
+.at-table{border-collapse:collapse;font-size:12px;table-layout:fixed}
+.at-table thead{position:sticky;top:0;z-index:10}
+/* Zakładka airdrop wychodzi poza max-width #app żeby tabela miała miejsce */
+#page-airdrop{margin:0 -1rem}
+.at-table th{background:var(--bg3);color:var(--text3);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;text-align:left;white-space:nowrap;border-bottom:2px solid var(--border2)}
 .at-table td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top;width:1%;white-space:normal}
 .at-row:hover td{background:rgba(255,255,255,.025)}
 .at-row-done td{opacity:.55}
