@@ -739,13 +739,15 @@ function updateMainBulkBar() {
 async function deleteMainSelected() {
   const n = mainSelected.size
   if (!n) return
-  if (!confirm(`Usunąć ${n} zaznaczonych wpisów? Tej operacji nie można cofnąć.`)) return
+  if (!confirm(`Odrzucić ${n} zaznaczonych wpisów?`)) return
   const ids = [...mainSelected]
-  await Promise.all(ids.map(id => deleteDoc(doc(db, 'posts', id))))
-  ids.forEach(id => delete posts[id])
+  await Promise.all(ids.map(id => {
+    posts[id].status = 'Odrzucone'
+    return updateDoc(doc(db, 'posts', id), { status: 'Odrzucone' })
+  }))
   mainSelected.clear()
   renderMain(); updateStats(); updateBadges()
-  toast(`Usunięto ${n} wpisów ✓`)
+  toast(`Odrzucono ${n} wpisów ✓`)
 }
 
 // ── DODAJ RĘCZNIE ────────────────────────────────────────────────
@@ -2174,7 +2176,7 @@ function buildApp() {
       <!-- Bulk bar — pojawia się gdy zaznaczone wpisy -->
       <div id="main-bulk-bar" style="display:none;align-items:center;gap:8px;padding:9px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);margin-bottom:10px;flex-wrap:wrap">
         <span id="main-bulk-count" style="font-size:13px;font-weight:700;color:var(--neon4)"></span>
-        <button class="btn btn-danger" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="deleteMainSelected()">🗑 Usuń zaznaczone</button>
+        <button class="btn btn-danger" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="deleteMainSelected()">Odrzuć zaznaczone</button>
         <button class="btn" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="mainSelected.clear();updateMainBulkBar()">✕ Odznacz</button>
       </div>
       <div id="main-cards"><div class="loading">Ładowanie...</div></div>
