@@ -344,6 +344,7 @@ let atType    = ''
 let atView    = 'table' // 'table' | 'cards'
 let atSelected  = new Set() // zaznaczone docId do masowego usuwania
 let atShowHidden = false     // czy pokazywać ukryte wpisy
+let mainSelected = new Set() // zaznaczone posty w zakładce Wpisy
 
 // ── UTILS ─────────────────────────────────────────────────────────
 const nowStr = () => new Date().toLocaleString('pl-PL',{hour12:false}).replace(',','')
@@ -650,6 +651,9 @@ function renderMain() {
   if (!el) return
   if (!list.length) { el.innerHTML = '<div class="empty">Brak wpisów pasujących do filtrów.</div>'; return }
 
+  // Bulk bar — pokaż/ukryj
+  updateMainBulkBar()
+
   el.innerHTML = list.map(p => {
     // Linki z posta
     const linksH = p.links?.length
@@ -672,6 +676,7 @@ function renderMain() {
 
     return `<div class="card" id="card-${p.id}">
       <div class="card-head">
+        <input type="checkbox" class="main-chk" ${mainSelected.has(p.id)?'checked':''} onchange="mainToggleOne('${p.id}',this.checked)" style="width:15px;height:15px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0;margin-right:2px">
         <span class="account">@${p.account}</span>
         ${(p.isRT || (p.account&&p.account.includes(' RT @'))) ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
         ${p.manualEntry ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.3);font-weight:700">✍ Ręczny</span>' : ''}
@@ -713,6 +718,34 @@ function renderMain() {
       </div>
     </div>`
   }).join('')
+}
+
+// ── MAIN BULK SELECT ─────────────────────────────────────────────
+function mainToggleOne(id, checked) {
+  if (checked) mainSelected.add(id)
+  else mainSelected.delete(id)
+  updateMainBulkBar()
+}
+
+function updateMainBulkBar() {
+  const bar   = document.getElementById('main-bulk-bar')
+  const count = document.getElementById('main-bulk-count')
+  if (!bar) return
+  const n = mainSelected.size
+  bar.style.display = n > 0 ? 'flex' : 'none'
+  if (count) count.textContent = `Zaznaczono: ${n}`
+}
+
+async function deleteMainSelected() {
+  const n = mainSelected.size
+  if (!n) return
+  if (!confirm(`Usunąć ${n} zaznaczonych wpisów? Tej operacji nie można cofnąć.`)) return
+  const ids = [...mainSelected]
+  await Promise.all(ids.map(id => deleteDoc(doc(db, 'posts', id))))
+  ids.forEach(id => delete posts[id])
+  mainSelected.clear()
+  renderMain(); updateStats(); updateBadges()
+  toast(`Usunięto ${n} wpisów ✓`)
 }
 
 // ── DODAJ RĘCZNIE ────────────────────────────────────────────────
@@ -2138,6 +2171,12 @@ function buildApp() {
           <option value="all">I</option>
         </select>
       </div>
+      <!-- Bulk bar — pojawia się gdy zaznaczone wpisy -->
+      <div id="main-bulk-bar" style="display:none;align-items:center;gap:8px;padding:9px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);margin-bottom:10px;flex-wrap:wrap">
+        <span id="main-bulk-count" style="font-size:13px;font-weight:700;color:var(--neon4)"></span>
+        <button class="btn btn-danger" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="deleteMainSelected()">🗑 Usuń zaznaczone</button>
+        <button class="btn" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="mainSelected.clear();updateMainBulkBar()">✕ Odznacz</button>
+      </div>
       <div id="main-cards"><div class="loading">Ładowanie...</div></div>
     </div>
 
@@ -2718,6 +2757,7 @@ function copyRefFromSelect(selectId) {
 Object.assign(window, {
   loginGoogle, logout, switchTab, switchSubTab, syncSheets,
   renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText,
+  mainToggleOne, updateMainBulkBar, deleteMainSelected,
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
   addMyPost, toggleMyForm, publishMyPost, deleteMyPost, saveMyNote,
   renderArchive, restorePost, toggleArchExpand,
