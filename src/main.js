@@ -1,7 +1,7 @@
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
 import {
-  collection, doc, getDocs, setDoc, updateDoc, deleteDoc, query, orderBy, onSnapshot
+  collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, onSnapshot
 } from 'firebase/firestore'
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
 
@@ -481,7 +481,7 @@ async function logout() {
 // ── FIREBASE LOAD ─────────────────────────────────────────────────
 async function loadAll() {
   posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}
-  const [ps, ms, rs, ns, tgs, tgw, ks, at] = await Promise.all([
+  const [ps, ms, rs, ns, tgs, tgw, ks, at, cfg] = await Promise.all([
     getDocs(query(collection(db,'posts'),      orderBy('xDate','desc'))),
     getDocs(query(collection(db,'myPosts'),    orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
@@ -490,6 +490,7 @@ async function loadAll() {
     getDocs(query(collection(db,'tgWpisy'),    orderBy('addedAt','desc'))),
     getDocs(collection(db,'konta')),
     getDocs(query(collection(db,'airdropTasks'), orderBy('addedAt','desc'))),
+    getDoc(doc(db,'airdropConfig','settings')),
   ])
   ps.forEach(d  => { posts[d.id]        = d.data() })
   ms.forEach(d  => { myPosts[d.id]      = d.data() })
@@ -499,6 +500,12 @@ async function loadAll() {
   tgw.forEach(d => { tgWpisy[d.id]      = d.data() })
   ks.forEach(d  => { konta[d.id]        = d.data() })
   at.forEach(d  => { airdropTasks[d.id] = d.data() })
+  // Wczytaj customowe statusy/typy jeśli istnieją
+  if (cfg.exists()) {
+    const data = cfg.data()
+    if (data.statuses?.length) AT_STATUSES = data.statuses
+    if (data.types?.length)    AT_TYPES    = data.types
+  }
 }
 
 // ── SHEETS SYNC ───────────────────────────────────────────────────
@@ -571,7 +578,7 @@ function switchSubTab(name) {
   const pageEl = document.getElementById(`sub-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {archiwum:renderArchive, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, kalendarz:renderKalendarz}
+  const fn = {archiwum:renderArchive, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, kalendarz:renderKalendarz, ustawienia:renderAtSettings}
   if (fn[name]) fn[name]()
 }
 
@@ -1587,8 +1594,8 @@ function toggleTgExpand(prefix, id) {
 }
 
 // ── AIRDROP TASKS ─────────────────────────────────────────────────
-const AT_STATUSES = ['TODO','DONE na 1 koncie','DONE na 3 walletach','DONE na 3 kontach gmail','DONE na 5 walletach','Pominięty']
-const AT_TYPES    = ['Testnet','Mainnet','WL','Airdrop','Inne']
+let AT_STATUSES = ['TODO','DONE na 1 koncie','DONE na 3 walletach','DONE na 3 kontach gmail','DONE na 5 walletach','Pominięty']
+let AT_TYPES    = ['Testnet','Mainnet','WL','Airdrop','Inne']
 
 function atStatusStyle(s) {
   if (!s) return 'background:rgba(245,158,11,.12);color:#f59e0b'
@@ -2101,6 +2108,108 @@ async function importAtXlsx(input) {
 
 // ── KONIEC: AIRDROP TASKS ─────────────────────────────────────────
 
+// ── AIRDROP SETTINGS ─────────────────────────────────────────────
+async function saveAtConfig() {
+  await setDoc(doc(db, 'airdropConfig', 'settings'), {
+    statuses: AT_STATUSES,
+    types:    AT_TYPES,
+  })
+}
+
+function renderAtSettings() {
+  const el = document.getElementById('sub-ustawienia')
+  if (!el) return
+  el.innerHTML = `
+    <div style="max-width:560px;display:flex;flex-direction:column;gap:24px">
+
+      <!-- STATUSY -->
+      <div class="form-card">
+        <div class="form-title">📋 Statusy projektów</div>
+        <div id="at-statuses-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+          ${AT_STATUSES.map((s,i) => `
+            <div style="display:flex;gap:6px;align-items:center">
+              <input class="form-input" value="${s}" id="ats-${i}" style="flex:1">
+              <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;flex-shrink:0" onclick="removeAtStatus(${i})">✕</button>
+            </div>`).join('')}
+        </div>
+        <div style="display:flex;gap:6px">
+          <input class="form-input" id="ats-new" placeholder="Nowy status..." style="flex:1">
+          <button class="btn btn-primary" style="white-space:nowrap" onclick="addAtStatus()">+ Dodaj</button>
+        </div>
+        <button class="btn btn-primary" style="margin-top:10px;width:100%" onclick="saveAtStatuses()">💾 Zapisz statusy</button>
+      </div>
+
+      <!-- TYPY -->
+      <div class="form-card">
+        <div class="form-title">🏷 Typy projektów</div>
+        <div id="at-types-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+          ${AT_TYPES.map((t,i) => `
+            <div style="display:flex;gap:6px;align-items:center">
+              <input class="form-input" value="${t}" id="att-${i}" style="flex:1">
+              <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;flex-shrink:0" onclick="removeAtType(${i})">✕</button>
+            </div>`).join('')}
+        </div>
+        <div style="display:flex;gap:6px">
+          <input class="form-input" id="att-new" placeholder="Nowy typ..." style="flex:1">
+          <button class="btn btn-primary" style="white-space:nowrap" onclick="addAtType()">+ Dodaj</button>
+        </div>
+        <button class="btn btn-primary" style="margin-top:10px;width:100%" onclick="saveAtTypes()">💾 Zapisz typy</button>
+      </div>
+
+    </div>`
+}
+
+function addAtStatus() {
+  const inp = document.getElementById('ats-new')
+  const val = inp?.value.trim()
+  if (!val) return
+  AT_STATUSES.push(val)
+  inp.value = ''
+  renderAtSettings()
+}
+
+function removeAtStatus(i) {
+  AT_STATUSES.splice(i, 1)
+  renderAtSettings()
+}
+
+async function saveAtStatuses() {
+  // Zbierz aktualne wartości z inputów (użytkownik mógł edytować)
+  AT_STATUSES = AT_STATUSES.map((_,i) => {
+    const el = document.getElementById(`ats-${i}`)
+    return el ? el.value.trim() : _
+  }).filter(Boolean)
+  await saveAtConfig()
+  renderAtSettings()
+  renderAirdrop() // odśwież dropdowny w tabeli
+  toast('Statusy zapisane ✓')
+}
+
+function addAtType() {
+  const inp = document.getElementById('att-new')
+  const val = inp?.value.trim()
+  if (!val) return
+  AT_TYPES.push(val)
+  inp.value = ''
+  renderAtSettings()
+}
+
+function removeAtType(i) {
+  AT_TYPES.splice(i, 1)
+  renderAtSettings()
+}
+
+async function saveAtTypes() {
+  AT_TYPES = AT_TYPES.map((_,i) => {
+    const el = document.getElementById(`att-${i}`)
+    return el ? el.value.trim() : _
+  }).filter(Boolean)
+  await saveAtConfig()
+  renderAtSettings()
+  renderAirdrop()
+  toast('Typy zapisane ✓')
+}
+
 // ── BUILD HTML ────────────────────────────────────────────────────
 function buildApp() {
   document.getElementById('app').innerHTML = `
@@ -2406,7 +2515,8 @@ function buildApp() {
         <button class="subtab active" data-subtab="archiwum"  onclick="switchSubTab('archiwum')">Archiwum <span class="tab-badge" id="tab-arch-badge" style="background:rgba(0,229,255,.1);color:var(--neon)">0</span></button>
         <button class="subtab"        data-subtab="tgsygnaly" onclick="switchSubTab('tgsygnaly')">📡 TG Sygnały <span class="tab-badge" id="tab-tgsig-badge" style="background:rgba(245,158,11,.25);color:#f59e0b">0</span></button>
         <button class="subtab"        data-subtab="tgwpisy"   onclick="switchSubTab('tgwpisy')">📋 TG Wpisy <span class="tab-badge" id="tab-tgwpisy-badge" style="background:rgba(124,58,237,.25);color:#a78bfa">0</span></button>
-        <button class="subtab"        data-subtab="kalendarz" onclick="switchSubTab('kalendarz')">Kalendarz</button>
+        <button class="subtab"        data-subtab="kalendarz"   onclick="switchSubTab('kalendarz')">Kalendarz</button>
+        <button class="subtab"        data-subtab="ustawienia"  onclick="switchSubTab('ustawienia')">⚙️ Ustawienia</button>
       </div>
 
       <!-- ARCHIWUM (podzakładka) -->
@@ -2461,6 +2571,10 @@ function buildApp() {
 
       <!-- KALENDARZ (podzakładka) -->
       <div id="sub-kalendarz" class="subpage">
+      </div>
+
+      <div id="sub-ustawienia" class="subpage">
+        <div class="loading">Ładowanie ustawień...</div>
       </div>
 
     </div><!-- /page-wiecej -->
@@ -2773,7 +2887,7 @@ Object.assign(window, {
   addAccount, startAccEdit, cancelAccEdit, saveAccEdit, deleteAccount,
   triggerAIPara,
   toggleManualForm, addManualPost,
-  renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
+  renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
 })
 
