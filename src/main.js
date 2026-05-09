@@ -2887,6 +2887,7 @@ Object.assign(window, {
   addAccount, startAccEdit, cancelAccEdit, saveAccEdit, deleteAccount,
   triggerAIPara,
   toggleManualForm, addManualPost,
+  renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
 })
