@@ -1095,7 +1095,6 @@ async function restorePost(id) {
 // ── RENDER: NOTES ─────────────────────────────────────────────────
 function renderNotes() {
   const list = Object.values(notes).sort((a,b)=>{
-    // Obsługa obu formatów: PL (dd.mm.yyyy) i ISO (yyyy-mm-dd)
     const da = parseDateStr(a.created) + (a.created||'').slice(10)
     const db2 = parseDateStr(b.created) + (b.created||'').slice(10)
     return db2.localeCompare(da)
@@ -1103,14 +1102,43 @@ function renderNotes() {
   const el = document.getElementById('notes-cards')
   if(!el) return
   if(!list.length){el.innerHTML='<div class="empty">Brak notatek.</div>';return}
-  el.innerHTML = list.map(n=>`
+  el.innerHTML = list.map(n=>{
+    const editing = !!n._editing
+    return `
     <div class="note-card">
       <div class="note-head">
         <span class="note-date">📝 ${n.created}</span>
-        <button class="btn btn-danger" style="font-size:11px;padding:2px 8px" onclick="deleteNote('${n.id}')">Usuń</button>
+        <div style="display:flex;gap:4px">
+          ${editing
+            ? `<button class="btn btn-primary" style="font-size:11px;padding:2px 8px" onclick="saveNoteEdit('${n.id}')">💾 Zapisz</button>
+               <button class="btn" style="font-size:11px;padding:2px 8px" onclick="cancelNoteEdit('${n.id}')">Anuluj</button>`
+            : `<button class="btn" style="font-size:11px;padding:2px 8px" onclick="startNoteEdit('${n.id}')">✏️ Edytuj</button>`
+          }
+          <button class="btn btn-danger" style="font-size:11px;padding:2px 8px" onclick="deleteNote('${n.id}')">Usuń</button>
+        </div>
       </div>
-      <div class="note-text">${n.text}</div>
-    </div>`).join('')
+      ${editing
+        ? `<textarea id="note-edit-${n.id}" style="width:100%;min-height:90px;margin-top:6px;box-sizing:border-box" class="form-textarea">${n.text}</textarea>`
+        : `<div class="note-text">${n.text}</div>`
+      }
+    </div>`
+  }).join('')
+}
+
+function startNoteEdit(id)  { if(notes[id]){ notes[id]._editing=true;  renderNotes() } }
+function cancelNoteEdit(id) { if(notes[id]){ notes[id]._editing=false; renderNotes() } }
+
+async function saveNoteEdit(id) {
+  const n = notes[id]
+  if (!n) return
+  const text = document.getElementById(`note-edit-${id}`)?.value.trim()
+  if (!text) { toast('Notatka nie może być pusta!'); return }
+  n.text = text
+  n._editing = false
+  const save = {...n}; delete save._editing
+  await setDoc(doc(db,'notes',id), save)
+  renderNotes()
+  toast('Zaktualizowano ✓')
 }
 
 async function addNote() {
@@ -2119,6 +2147,14 @@ async function saveAtConfig() {
 function renderAtSettings() {
   const el = document.getElementById('sub-ustawienia')
   if (!el) return
+
+  // Zbierz cookies z przeglądarki i pokaż ich nazwy + daty wygaśnięcia
+  // Cookies w przeglądarce nie ujawniają expiry przez JS (HttpOnly) —
+  // pokazujemy listę dostępnych cookies (non-HttpOnly) oraz info o sesji Firebase
+  const cookieList = document.cookie
+    ? document.cookie.split(';').map(c => c.trim()).filter(Boolean)
+    : []
+
   el.innerHTML = `
     <div style="max-width:560px;display:flex;flex-direction:column;gap:24px">
 
@@ -2154,6 +2190,53 @@ function renderAtSettings() {
           <button class="btn btn-primary" style="white-space:nowrap" onclick="addAtType()">+ Dodaj</button>
         </div>
         <button class="btn btn-primary" style="margin-top:10px;width:100%" onclick="saveAtTypes()">💾 Zapisz typy</button>
+      </div>
+
+      <!-- COOKIES / SESJA -->
+      <div class="form-card">
+        <div class="form-title">🍪 Cookies i sesja</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px">
+          Cookies HttpOnly (w tym auth cookies XParafBota) nie są widoczne przez JavaScript ze względów bezpieczeństwa przeglądarki.
+          Poniżej widoczne są tylko cookies dostępne z poziomu JS oraz informacje o aktualnej sesji Firebase.
+        </div>
+
+        <div style="margin-bottom:14px">
+          <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Sesja Firebase (Google Auth)</div>
+          ${(() => {
+            const user = window._currentUser
+            if (!user) return '<div style="color:var(--text3);font-size:12px">Brak zalogowanego użytkownika</div>'
+            const meta = user.metadata
+            const lastSignIn = meta?.lastSignInTime ? new Date(meta.lastSignInTime).toLocaleString('pl-PL') : '—'
+            const created   = meta?.creationTime   ? new Date(meta.creationTime).toLocaleString('pl-PL')   : '—'
+            return `
+              <div style="display:grid;grid-template-columns:140px 1fr;gap:4px 10px;font-size:12px">
+                <span style="color:var(--text3)">Email:</span><span style="color:var(--text)">${user.email||'—'}</span>
+                <span style="color:var(--text3)">Ostatnie logowanie:</span><span style="color:var(--text)">${lastSignIn}</span>
+                <span style="color:var(--text3)">Konto utworzone:</span><span style="color:var(--text)">${created}</span>
+                <span style="color:var(--text3)">Token wygasa:</span><span style="color:var(--neon4)">co ~1 godzinę (auto-refresh)</span>
+              </div>`
+          })()}
+        </div>
+
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">
+            Cookies JS-accessible (${cookieList.length})
+          </div>
+          ${cookieList.length
+            ? `<div style="display:flex;flex-direction:column;gap:3px">
+                ${cookieList.map(c => {
+                  const name = c.split('=')[0]
+                  return `<div style="font-size:11px;font-family:monospace;background:var(--bg3);padding:4px 8px;border-radius:4px;color:var(--text2)">${name}</div>`
+                }).join('')}
+              </div>`
+            : '<div style="font-size:12px;color:var(--text3)">Brak cookies JS-accessible (wszystkie są HttpOnly — to dobrze, znaczy że są chronione).</div>'
+          }
+          <div style="margin-top:10px;font-size:11px;color:var(--text3);line-height:1.6">
+            ⚠️ Cookies XParafBota (Playwright/GraphQL) są przechowywane lokalnie na VPS w pliku
+            <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">/root/xparafbot/cookies.json</code>
+            lub podobnym. Sprawdź datę modyfikacji tego pliku na VPS żeby ocenić świeżość cookies.
+          </div>
+        </div>
       </div>
 
     </div>`
@@ -2877,7 +2960,7 @@ Object.assign(window, {
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
   addMyPost, toggleMyForm, publishMyPost, deleteMyPost, saveMyNote,
   renderArchive, restorePost, toggleArchExpand,
-  addNote, deleteNote,
+  addNote, deleteNote, startNoteEdit, cancelNoteEdit, saveNoteEdit,
   renderRef, toggleRefForm, addRef, startRefEdit, cancelRefEdit, saveRefEdit, deleteRef,
   toggleEmojiPanel, addEmoji, emojiClick, removeEmoji,
   copyRefToParaphrase, copyRefFromSelect,
@@ -2896,6 +2979,7 @@ Object.assign(window, {
 buildApp()
 
 onAuthStateChanged(auth, async user => {
+  window._currentUser = user || null
   if (user) {
     showMainApp(user)
     await loadAll()
