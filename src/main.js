@@ -342,8 +342,10 @@ let atSearch  = ''
 let atStatus  = ''
 let atType    = ''
 let atView    = 'table' // 'table' | 'cards'
-let atSelected  = new Set() // zaznaczone docId do masowego usuwania
-let atShowHidden = false     // czy pokazywać ukryte wpisy
+let atSelected  = new Set()
+let atShowHidden = false
+let atSortCol = 'excelRow' // kolumna sortowania
+let atSortDir = 'desc'     // 'asc' | 'desc'
 let mainSelected = new Set() // zaznaczone posty w zakładce Wpisy
 
 // ── UTILS ─────────────────────────────────────────────────────────
@@ -1094,14 +1096,18 @@ async function restorePost(id) {
 
 // ── RENDER: NOTES ─────────────────────────────────────────────────
 function renderNotes() {
-  const list = Object.values(notes).sort((a,b)=>{
-    const da = parseDateStr(a.created) + (a.created||'').slice(10)
-    const db2 = parseDateStr(b.created) + (b.created||'').slice(10)
-    return db2.localeCompare(da)
-  })
+  const searchEl = document.getElementById('note-search')
+  const search = searchEl ? searchEl.value.toLowerCase() : ''
+  const list = Object.values(notes)
+    .filter(n => !search || n.text.toLowerCase().includes(search))
+    .sort((a,b)=>{
+      const da = parseDateStr(a.created) + (a.created||'').slice(10)
+      const db2 = parseDateStr(b.created) + (b.created||'').slice(10)
+      return db2.localeCompare(da)
+    })
   const el = document.getElementById('notes-cards')
   if(!el) return
-  if(!list.length){el.innerHTML='<div class="empty">Brak notatek.</div>';return}
+  if(!list.length){el.innerHTML=`<div class="empty">${search ? 'Brak notatek pasujących do wyszukiwania.' : 'Brak notatek.'}</div>`;return}
   el.innerHTML = list.map(n=>{
     const editing = !!n._editing
     return `
@@ -1112,7 +1118,8 @@ function renderNotes() {
           ${editing
             ? `<button class="btn btn-primary" style="font-size:11px;padding:2px 8px" onclick="saveNoteEdit('${n.id}')">💾 Zapisz</button>
                <button class="btn" style="font-size:11px;padding:2px 8px" onclick="cancelNoteEdit('${n.id}')">Anuluj</button>`
-            : `<button class="btn" style="font-size:11px;padding:2px 8px" onclick="startNoteEdit('${n.id}')">✏️ Edytuj</button>`
+            : `<button class="btn" style="font-size:11px;padding:2px 8px" onclick="startNoteEdit('${n.id}')">✏️ Edytuj</button>
+               <button class="btn" style="font-size:11px;padding:2px 8px" onclick="copyNoteText('${n.id}')">📋 Kopiuj</button>`
           }
           <button class="btn btn-danger" style="font-size:11px;padding:2px 8px" onclick="deleteNote('${n.id}')">Usuń</button>
         </div>
@@ -1123,6 +1130,12 @@ function renderNotes() {
       }
     </div>`
   }).join('')
+}
+
+function copyNoteText(id) {
+  const n = notes[id]
+  if (!n) return
+  navigator.clipboard.writeText(n.text).then(() => toast('📋 Skopiowano ✓'))
 }
 
 function startNoteEdit(id)  { if(notes[id]){ notes[id]._editing=true;  renderNotes() } }
@@ -1627,9 +1640,10 @@ let AT_TYPES    = ['Testnet','Mainnet','WL','Airdrop','Inne']
 
 function atStatusStyle(s) {
   if (!s) return 'background:rgba(245,158,11,.12);color:#f59e0b'
-  if (s.startsWith('TODO')) return 'background:rgba(245,158,11,.12);color:#f59e0b'
-  if (s.startsWith('DONE')) return 'background:rgba(16,185,129,.12);color:#10b981'
-  if (s === 'Pominięty')    return 'background:rgba(239,68,68,.1);color:#ef4444'
+  const u = s.toUpperCase()
+  if (u.startsWith('TODO'))    return 'background:rgba(245,158,11,.12);color:#f59e0b'
+  if (u.startsWith('DONE'))    return 'background:rgba(16,185,129,.12);color:#10b981'
+  if (s === 'Pominięty')       return 'background:rgba(239,68,68,.1);color:#ef4444'
   return 'background:var(--bg3);color:var(--text2)'
 }
 
@@ -1656,10 +1670,25 @@ function renderAirdrop() {
       return true
     })
     .sort(([,a],[,b]) => {
-      const aR = a.excelRow || 0
-      const bR = b.excelRow || 0
-      if (bR !== aR) return bR - aR
-      return (b.addedAt||'').localeCompare(a.addedAt||'')
+      const dir = atSortDir === 'asc' ? 1 : -1
+      const col = atSortCol
+      if (col === 'excelRow') {
+        return ((a.excelRow||0) - (b.excelRow||0)) * dir
+      }
+      if (col === 'status') {
+        return (a.status||'').localeCompare(b.status||'', 'pl') * dir
+      }
+      if (col === 'type') {
+        return (a.type||'').localeCompare(b.type||'', 'pl') * dir
+      }
+      if (col === 'project') {
+        return (a.project||'').localeCompare(b.project||'', 'pl') * dir
+      }
+      if (col === 'date') {
+        return (a.date||'').localeCompare(b.date||'') * dir
+      }
+      // domyślnie excelRow desc
+      return ((b.excelRow||0) - (a.excelRow||0))
     })
 
   const statsEl    = document.getElementById('at-stats-all')
@@ -1667,8 +1696,8 @@ function renderAirdrop() {
   const statsDone  = document.getElementById('at-stats-done')
   const allTasks   = Object.values(airdropTasks)
   if (statsEl)   statsEl.textContent   = allTasks.length
-  if (statsTodo) statsTodo.textContent = allTasks.filter(p => p.status?.startsWith('TODO') || !p.status).length
-  if (statsDone) statsDone.textContent = allTasks.filter(p => p.status?.startsWith('DONE')).length
+  if (statsTodo) statsTodo.textContent = allTasks.filter(p => p.status?.toUpperCase().startsWith('TODO') || !p.status).length
+  if (statsDone) statsDone.textContent = allTasks.filter(p => p.status?.toUpperCase().startsWith('DONE')).length
 
   // Usuń z setu zaznaczenia wpisy których już nie ma na liście
   const visibleIds = new Set(list.map(([id]) => id))
@@ -1719,6 +1748,8 @@ function renderAirdrop() {
       return `<a href="${url}" target="_blank" class="at-link" title="${url}">${url.replace(/^https?:\/\//,'').slice(0,32)}</a>`
     }
 
+    const si = (col) => atSortCol===col ? (atSortDir==='desc'?'↓':'↑') : '↕'
+    const sh = (col, label) => `<th onclick="atSetSort('${col}')" style="cursor:pointer;user-select:none" title="Sortuj po: ${label}">${label} <span style="opacity:.5;font-size:9px">${si(col)}</span></th>`
     const tableHtml = `
       <table class="at-table" style="width:1460px">
         <colgroup>
@@ -1740,12 +1771,12 @@ function renderAirdrop() {
             <th style="width:32px;padding:8px 6px 8px 12px">
               <input type="checkbox" class="at-chk" ${allChecked?'checked':''} onchange="atToggleAll(this.checked)" title="Zaznacz wszystkie">
             </th>
-            <th style="width:42px">#</th>
-            <th>Status</th>
-            <th>Typ</th>
-            <th>Projekt</th>
+            ${sh('excelRow','#')}
+            ${sh('status','Status')}
+            ${sh('type','Typ')}
+            ${sh('project','Projekt')}
             <th>Zadania</th>
-            <th>Data</th>
+            ${sh('date','Data')}
             <th>Link socjali</th>
             <th>Linki testnet</th>
             <th>Portfel</th>
@@ -1755,7 +1786,7 @@ function renderAirdrop() {
         </thead>
         <tbody>
           ${list.map(([docId, p]) => `
-            <tr class="at-row${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-row-done' : ''}${atSelected.has(docId)?' at-row-sel':''}">
+            <tr class="at-row${p.status?.toUpperCase().startsWith('DONE') || p.status==='Pominięty' ? ' at-row-done' : ''}${atSelected.has(docId)?' at-row-sel':''}">
               <td style="padding:7px 6px 7px 12px">
                 <input type="checkbox" class="at-chk" ${atSelected.has(docId)?'checked':''} onchange="atToggleOne('${docId}',this.checked)">
               </td>
@@ -1781,6 +1812,7 @@ function renderAirdrop() {
               <td>
                 <div style="display:flex;gap:4px;flex-wrap:nowrap">
                   <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')" title="Edytuj">✏️</button>
+                  <button class="btn" style="font-size:11px;padding:3px 7px" onclick="duplicateAt('${docId}')" title="Duplikuj">⧉</button>
                   <button class="btn ${p.hidden?'btn-success':'btn-info'}" style="font-size:11px;padding:3px 7px" onclick="toggleAtHide('${docId}')" title="${p.hidden?'Pokaż':'Ukryj'}">${p.hidden?'👁':'🙈'}</button>
                   <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')" title="Usuń">✕</button>
                 </div>
@@ -1794,7 +1826,7 @@ function renderAirdrop() {
   } else {
     // Widok kart — checkbox w nagłówku karty
     el.innerHTML = list.map(([docId, p]) => `
-      <div class="at-card${p.status?.startsWith('DONE') || p.status==='Pominięty' ? ' at-card-done' : ''}${atSelected.has(docId)?' at-card-sel':''}">
+      <div class="at-card${p.status?.toUpperCase().startsWith('DONE') || p.status==='Pominięty' ? ' at-card-done' : ''}${atSelected.has(docId)?' at-card-sel':''}">
         <div class="at-card-head">
           <input type="checkbox" class="at-chk" ${atSelected.has(docId)?'checked':''} onchange="atToggleOne('${docId}',this.checked)" style="flex-shrink:0">
           <span class="at-card-project">${p.project||'(brak nazwy)'}</span>
@@ -1803,6 +1835,7 @@ function renderAirdrop() {
             ${AT_STATUSES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
           </select>
           <button class="btn" style="font-size:11px;padding:3px 7px" onclick="openAtEdit('${docId}')" title="Edytuj">✏️</button>
+          <button class="btn" style="font-size:11px;padding:3px 7px" onclick="duplicateAt('${docId}')" title="Duplikuj">⧉</button>
           <button class="btn ${p.hidden?'btn-success':'btn-info'}" style="font-size:11px;padding:3px 7px" onclick="toggleAtHide('${docId}')" title="${p.hidden?'Pokaż':'Ukryj'}">${p.hidden?'👁':'🙈'}</button>
           <button class="btn btn-danger" style="font-size:11px;padding:3px 7px" onclick="deleteAt('${docId}')" title="Usuń">✕</button>
         </div>
@@ -1917,6 +1950,54 @@ function atExpandCell(docId, field) {
       if (btn) btn.innerHTML = '<span class="at-expand-icon">▼</span> więcej'
     }
   }
+}
+
+function exportAtCsv() {
+  const headers = ['#','Status','Typ','Projekt','Zadania','Data','Link socjali','Linki testnet','Portfel','Notatka']
+  const esc = v => `"${String(v||'').replace(/"/g,'""')}"`
+  const rows = Object.values(airdropTasks)
+    .filter(p => !p.hidden)
+    .sort((a,b) => (b.excelRow||0) - (a.excelRow||0))
+    .map(p => [
+      p.excelRow||'',
+      p.status||'',
+      p.type||'',
+      p.project||'',
+      p.tasks||'',
+      p.date||'',
+      p.socialLink||'',
+      p.testnetLinks||'',
+      p.wallet||'',
+      p.note||'',
+    ].map(esc).join(','))
+
+  const csv  = [headers.map(esc).join(','), ...rows].join('\n')
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = `projekty_${new Date().toISOString().slice(0,10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+  toast('📤 Eksport gotowy ✓')
+}
+
+async function duplicateAt(docId) {
+  const src = airdropTasks[docId]
+  if (!src) return
+  const newId  = 'at_' + uid()
+  const nextRow = Math.max(0, ...Object.values(airdropTasks).map(p => p.excelRow || 0)) + 1
+  const entry  = { ...src, id: newId, excelRow: nextRow, status: 'TODO', addedAt: nowStr() }
+  await setDoc(doc(db, 'airdropTasks', newId), entry)
+  airdropTasks[newId] = entry
+  renderAirdrop(); updateBadges()
+  toast('⧉ Zduplikowano projekt ✓')
+}
+
+function atSetSort(col) {
+  if (atSortCol === col) atSortDir = atSortDir === 'desc' ? 'asc' : 'desc'
+  else { atSortCol = col; atSortDir = 'desc' }
+  renderAirdrop()
 }
 
 async function toggleAtHide(docId) {
@@ -2494,6 +2575,7 @@ function buildApp() {
           📥 Import .xlsx
           <input type="file" accept=".xlsx,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="importAtXlsx(this)">
         </label>
+        <button class="btn" style="white-space:nowrap" onclick="exportAtCsv()">📤 Eksport CSV</button>
         <span id="at-import-status" style="font-size:12px;color:var(--text3)"></span>
       </div>
 
@@ -2668,6 +2750,9 @@ function buildApp() {
         <div class="form-title">Nowa notatka</div>
         <textarea class="note-input" id="new-note" placeholder="Zapisz coś — pomysł, link, przypomnienie..."></textarea>
         <div style="margin-top:8px"><button class="btn btn-primary" onclick="addNote()">Zapisz notatkę</button></div>
+      </div>
+      <div class="filters" style="margin-bottom:12px">
+        <input id="note-search" placeholder="🔍 Szukaj w notatkach..." oninput="renderNotes()" style="flex:1">
       </div>
       <div id="notes-cards"></div>
     </div>
@@ -2960,7 +3045,7 @@ Object.assign(window, {
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
   addMyPost, toggleMyForm, publishMyPost, deleteMyPost, saveMyNote,
   renderArchive, restorePost, toggleArchExpand,
-  addNote, deleteNote, startNoteEdit, cancelNoteEdit, saveNoteEdit,
+  addNote, deleteNote, startNoteEdit, cancelNoteEdit, saveNoteEdit, copyNoteText,
   renderRef, toggleRefForm, addRef, startRefEdit, cancelRefEdit, saveRefEdit, deleteRef,
   toggleEmojiPanel, addEmoji, emojiClick, removeEmoji,
   copyRefToParaphrase, copyRefFromSelect,
@@ -2971,6 +3056,7 @@ Object.assign(window, {
   triggerAIPara,
   toggleManualForm, addManualPost,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
+  exportAtCsv, duplicateAt, atSetSort,
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
 })
