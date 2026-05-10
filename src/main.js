@@ -564,7 +564,7 @@ function switchTab(name) {
   const pageEl = document.getElementById(`page-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop}
+  const fn = {main:renderMain, moje:renderMoje, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats}
   if (fn[name]) fn[name]()
   // Wiecej — renderuj aktywną podzakładkę
   if (name === 'wiecej') {
@@ -687,6 +687,7 @@ function renderMain() {
       <div class="card-head">
         <input type="checkbox" class="main-chk" ${mainSelected.has(p.id)?'checked':''} onchange="mainToggleOne('${p.id}',this.checked)" style="width:15px;height:15px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0;margin-right:2px">
         <span class="account">@${p.account}</span>
+        ${(()=>{ const n=Object.values(posts).filter(x=>x.account===p.account&&x.status==='Nowy').length; return n>1?`<span style="font-size:10px;padding:1px 5px;border-radius:8px;background:rgba(0,229,255,.12);color:var(--neon);border:1px solid rgba(0,229,255,.25);font-weight:700" title="Nowych wpisów tego konta">${n}</span>`:''; })()}
         ${(p.isRT || (p.account&&p.account.includes(' RT @'))) ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
         ${p.manualEntry ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.3);font-weight:700">✍ Ręczny</span>' : ''}
         <a class="xlink" href="${p.xLink||'#'}" target="_blank">Otwórz na X ↗</a>
@@ -723,10 +724,112 @@ function renderMain() {
         <button class="btn" id="bexp-${p.id}" onclick="toggleExpand('${p.id}')">Rozwiń</button>
         <button class="btn" onclick="copyText(document.getElementById('orig-${p.id}').innerText)">Kopiuj oryginał</button>
         <button class="btn btn-info" onclick="copyText(document.getElementById('para-${p.id}').value)">Kopiuj parafrazę</button>
+        <button class="btn btn-success" onclick="addToProjects('${p.id}')" title="Dodaj do zakładki Projekty">🪂 Dodaj do Projektów</button>
         <button class="btn btn-danger ml-auto" onclick="setPostStatus('${p.id}','Odrzucone')">Odrzuć</button>
       </div>
     </div>`
   }).join('')
+}
+
+// ── DODAJ WPIS DO PROJEKTÓW (AI) ─────────────────────────────────
+async function callAIJson(prompt) {
+  // Używa tego samego systemu rotacji modeli co parafraza
+  for (let i = 0; i < AI_MODELS.length; i++) {
+    const model = getBestAvailableModel()
+    if (!model) break
+    try {
+      const key = import.meta.env[model.envKey]
+      let result = ''
+      if (model.type === 'gemini') {
+        const res = await fetch(`${model.url}?key=${key}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        })
+        if (!res.ok) throw new Error('RATE_LIMIT')
+        const data = await res.json()
+        result = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+      } else {
+        const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` }
+        if (model.id.startsWith('openrouter')) {
+          headers['HTTP-Referer'] = 'https://xpost-manager.vercel.app'
+          headers['X-Title'] = 'XPost Manager'
+        }
+        const res = await fetch(model.url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model: model.model,
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 300,
+            temperature: 0.2
+          })
+        })
+        if (res.status === 429 || res.status === 503) throw new Error('RATE_LIMIT')
+        if (!res.ok) throw new Error('API_ERROR_' + res.status)
+        const data = await res.json()
+        result = data.choices?.[0]?.message?.content || ''
+      }
+      if (result.trim()) return result.trim()
+      throw new Error('Pusta odpowiedź')
+    } catch(err) {
+      if (err.message === 'RATE_LIMIT') markModelExhausted(model)
+      else markModelExhausted(model)
+    }
+  }
+  return null
+}
+
+async function addToProjects(postId) {
+  const p = posts[postId]
+  if (!p) return
+  const btn = document.querySelector(`button[onclick="addToProjects('${postId}')"]`)
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ AI analizuje...' }
+
+  let project = '', tasks = '', socialLink = p.xLink || ''
+
+  try {
+    const prompt = `Przeanalizuj ten tweet o projekcie crypto/Web3 i wyciągnij:
+1. "project" - nazwa projektu/protokołu (max 3 słowa, samo imię własne np. "Initia", "Monad", "Babylon")
+2. "tasks" - co konkretnie trzeba zrobić (lista zadań po jednym na linię, max 5 zadań, zacznij każde od "-")
+
+Tweet: "${p.text}"
+
+Odpowiedz WYŁĄCZNIE w formacie JSON bez żadnego dodatkowego tekstu ani backticks:
+{"project":"...","tasks":"..."}`
+
+    const raw = await callAIJson(prompt)
+    if (raw) {
+      const clean  = raw.replace(/```json|```/g, '').trim()
+      const parsed = JSON.parse(clean)
+      project = parsed.project || p.account || ''
+      tasks   = parsed.tasks   || ''
+    }
+  } catch(e) {
+    console.warn('[addToProjects] AI error:', e)
+  }
+
+  // Fallback jeśli AI nie odpowiedziało
+  if (!project) project = p.account || 'Nowy projekt'
+
+  // Zapisz do Firebase
+  const docId   = 'at_' + uid()
+  const nextRow = Math.max(0, ...Object.values(airdropTasks).map(x => x.excelRow || 0)) + 1
+  const entry   = {
+    id: docId, excelRow: nextRow,
+    status: 'TODO', type: '',
+    project, tasks,
+    date: '', socialLink, testnetLinks: '',
+    wallet: '', imgUrl: '', note: '',
+    hidden: false, addedAt: nowStr()
+  }
+  await setDoc(doc(db, 'airdropTasks', docId), entry)
+  airdropTasks[docId] = entry
+  updateBadges()
+
+  if (btn) { btn.disabled = false; btn.textContent = '✅ Dodano!' }
+  setTimeout(() => { if (btn) btn.textContent = '🪂 Dodaj do Projektów' }, 2500)
+  toast(`🪂 Dodano projekt "${project}" ✓`)
 }
 
 // ── MAIN BULK SELECT ─────────────────────────────────────────────
@@ -2374,6 +2477,143 @@ async function saveAtTypes() {
   toast('Typy zapisane ✓')
 }
 
+// ── STATYSTYKI ────────────────────────────────────────────────────
+function renderStats() {
+  const el = document.getElementById('stats-content')
+  if (!el) return
+
+  // ── Dane: Wpisy ──
+  const allPosts   = Object.values(posts)
+  const activePosts = allPosts.filter(p => p.status !== 'Odrzucone' && p.status !== 'Opublikowane')
+  const newPosts    = allPosts.filter(p => p.status === 'Nowy')
+  const published   = allPosts.filter(p => p.status === 'Opublikowane')
+  const rejected    = allPosts.filter(p => p.status === 'Odrzucone')
+
+  // Top konta wg liczby aktywnych wpisów
+  const accountCounts = {}
+  activePosts.forEach(p => { accountCounts[p.account] = (accountCounts[p.account]||0) + 1 })
+  const topAccounts = Object.entries(accountCounts).sort((a,b)=>b[1]-a[1]).slice(0,10)
+  const maxAcc = topAccounts[0]?.[1] || 1
+
+  // Wpisy per dzień (ostatnie 14 dni)
+  const dayMap = {}
+  const today = new Date()
+  for (let i=13; i>=0; i--) {
+    const d = new Date(today); d.setDate(d.getDate()-i)
+    dayMap[d.toISOString().slice(0,10)] = 0
+  }
+  allPosts.forEach(p => {
+    const day = (p.xDate||p.addedAt||'').slice(0,10)
+    if (dayMap[day] !== undefined) dayMap[day]++
+  })
+  const dayEntries = Object.entries(dayMap)
+  const maxDay = Math.max(...dayEntries.map(([,v])=>v), 1)
+
+  // ── Dane: Projekty ──
+  const allProjects = Object.values(airdropTasks).filter(p => !p.hidden)
+  const projTodo    = allProjects.filter(p => (p.status||'').toUpperCase().startsWith('TODO') || !p.status)
+  const projDone    = allProjects.filter(p => (p.status||'').toUpperCase().startsWith('DONE'))
+  const projSkip    = allProjects.filter(p => p.status === 'Pominięty')
+
+  // Rozkład statusów projektów
+  const statusCounts = {}
+  allProjects.forEach(p => { const s=p.status||'Brak'; statusCounts[s]=(statusCounts[s]||0)+1 })
+  const statusEntries = Object.entries(statusCounts).sort((a,b)=>b[1]-a[1])
+  const maxSt = statusEntries[0]?.[1] || 1
+
+  // Typy projektów
+  const typeCounts = {}
+  allProjects.forEach(p => { const t=p.type||'Brak'; typeCounts[t]=(typeCounts[t]||0)+1 })
+  const typeEntries = Object.entries(typeCounts).sort((a,b)=>b[1]-a[1])
+
+  const bar = (val, max, color='var(--neon)') =>
+    `<div style="height:6px;border-radius:3px;background:var(--bg3);margin-top:3px">
+      <div style="height:6px;border-radius:3px;background:${color};width:${Math.round(val/max*100)}%;transition:width .3s"></div>
+    </div>`
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+
+      <!-- Wpisy: statsy -->
+      <div class="form-card">
+        <div class="form-title">📨 Wpisy z X</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+          <div class="stat"><div class="stat-n" style="color:var(--neon)">${activePosts.length}</div><div class="stat-l">Aktywne</div></div>
+          <div class="stat"><div class="stat-n" style="color:#f59e0b">${newPosts.length}</div><div class="stat-l">Nowe</div></div>
+          <div class="stat"><div class="stat-n" style="color:#10b981">${published.length}</div><div class="stat-l">Opublikowane</div></div>
+          <div class="stat"><div class="stat-n" style="color:#ef4444">${rejected.length}</div><div class="stat-l">Odrzucone</div></div>
+        </div>
+      </div>
+
+      <!-- Projekty: statsy -->
+      <div class="form-card">
+        <div class="form-title">🪂 Projekty</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+          <div class="stat"><div class="stat-n" style="color:var(--text)">${allProjects.length}</div><div class="stat-l">Wszystkie</div></div>
+          <div class="stat"><div class="stat-n" style="color:#f59e0b">${projTodo.length}</div><div class="stat-l">TODO</div></div>
+          <div class="stat"><div class="stat-n" style="color:#10b981">${projDone.length}</div><div class="stat-l">DONE</div></div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Pominięte: ${projSkip.length}</div>
+        <div style="font-size:11px;color:var(--text3)">Ukryte: ${Object.values(airdropTasks).filter(p=>p.hidden).length}</div>
+      </div>
+
+      <!-- Aktywność: wpisy per dzień -->
+      <div class="form-card" style="grid-column:span 2">
+        <div class="form-title">📅 Aktywność — ostatnie 14 dni</div>
+        <div style="display:flex;align-items:flex-end;gap:4px;height:80px;margin-bottom:6px">
+          ${dayEntries.map(([day,cnt])=>`
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="${day}: ${cnt} wpisów">
+              <div style="font-size:9px;color:var(--text3)">${cnt||''}</div>
+              <div style="width:100%;background:var(--neon);border-radius:2px 2px 0 0;opacity:.85;height:${Math.max(2,Math.round(cnt/maxDay*60))}px"></div>
+            </div>`).join('')}
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text3)">
+          <span>${dayEntries[0]?.[0]?.slice(5)}</span>
+          <span>${dayEntries[dayEntries.length-1]?.[0]?.slice(5)}</span>
+        </div>
+      </div>
+
+      <!-- Top konta -->
+      <div class="form-card">
+        <div class="form-title">👤 Top konta (aktywne wpisy)</div>
+        ${topAccounts.map(([acc,cnt])=>`
+          <div style="margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;font-size:12px">
+              <span style="color:var(--text)">@${acc}</span>
+              <span style="color:var(--neon);font-weight:700">${cnt}</span>
+            </div>
+            ${bar(cnt, maxAcc)}
+          </div>`).join('')}
+      </div>
+
+      <!-- Rozkład statusów projektów -->
+      <div class="form-card">
+        <div class="form-title">📋 Statusy projektów</div>
+        ${statusEntries.map(([st,cnt])=>`
+          <div style="margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;font-size:12px">
+              <span style="color:var(--text)">${st}</span>
+              <span style="color:var(--neon4);font-weight:700">${cnt}</span>
+            </div>
+            ${bar(cnt, maxSt, (st.toUpperCase().startsWith('DONE')?'#10b981':st.toUpperCase().startsWith('TODO')?'#f59e0b':st==='Pominięty'?'#ef4444':'var(--neon)'))}
+          </div>`).join('')}
+      </div>
+
+      <!-- Typy projektów -->
+      <div class="form-card">
+        <div class="form-title">🏷 Typy projektów</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          ${typeEntries.map(([t,cnt])=>`
+            <div style="display:flex;align-items:center;gap:5px;background:var(--bg3);padding:5px 10px;border-radius:8px">
+              <span style="font-size:12px;color:var(--text)">${t}</span>
+              <span style="font-size:13px;font-weight:700;color:var(--neon)">${cnt}</span>
+            </div>`).join('')}
+        </div>
+      </div>
+
+    </div>`
+}
+
 // ── BUILD HTML ────────────────────────────────────────────────────
 function buildApp() {
   document.getElementById('app').innerHTML = `
@@ -2413,6 +2653,7 @@ function buildApp() {
       <button class="tab"        data-tab="konta"   onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
       <button class="tab"        data-tab="manual"  onclick="switchTab('manual')">✍ Dodaj ręcznie</button>
       <button class="tab"        data-tab="airdrop" onclick="switchTab('airdrop')">🪂 Projekty <span class="tab-badge" id="tab-airdrop-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
+      <button class="tab"        data-tab="stats"   onclick="switchTab('stats')">📊 Statystyki</button>
       <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">Więcej ▾ <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
     </div>
 
@@ -2672,6 +2913,11 @@ function buildApp() {
       <!-- Treść tabeli / karty -->
       </div><!-- /at-page-inner -->
       <div id="airdrop-content" style="padding:0 1rem"><div class="loading">Ładowanie...</div></div>
+    </div>
+
+    <!-- STATYSTYKI -->
+    <div id="page-stats" class="page">
+      <div id="stats-content"><div class="loading">Ładowanie statystyk...</div></div>
     </div>
 
     <!-- WIĘCEJ (mega-zakładka z podzakładkami) -->
@@ -3040,7 +3286,7 @@ function copyRefFromSelect(selectId) {
 // ── EXPOSE ────────────────────────────────────────────────────────
 Object.assign(window, {
   loginGoogle, logout, switchTab, switchSubTab, syncSheets,
-  renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText,
+  renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText, addToProjects, callAIJson,
   mainToggleOne, updateMainBulkBar, deleteMainSelected,
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
   addMyPost, toggleMyForm, publishMyPost, deleteMyPost, saveMyNote,
@@ -3055,6 +3301,7 @@ Object.assign(window, {
   addAccount, startAccEdit, cancelAccEdit, saveAccEdit, deleteAccount,
   triggerAIPara,
   toggleManualForm, addManualPost,
+  renderStats,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
   exportAtCsv, duplicateAt, atSetSort,
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
