@@ -320,6 +320,7 @@ let tgWpisy    = {}
 let konta      = {}   // kategorie kont: { katId: { id, name, icon, note, accounts: [{id,name,note}] } }
 let airdropTasks = {}
 let aiTools      = {} // narzędzia AI: { docId: { id, name, desc, category, free, url, rating, tags, addedAt } } // projekty airdrop/testnet: { docId: { id, status, type, project, tasks, date, socialLink, testnetLinks, wallet, imgUrl, note, addedAt } }
+let manualDrafts = {} // szkice w "Dodaj ręcznie": { docId: { id, text, account, xLink, note, addedAt } }
 let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
 
 // Filter state — zarządzane lokalnie
@@ -483,28 +484,30 @@ async function logout() {
 
 // ── FIREBASE LOAD ─────────────────────────────────────────────────
 async function loadAll() {
-  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}; aiTools = {}
-  const [ps, ms, rs, ns, tgs, tgw, ks, at, cfg, ait] = await Promise.all([
-    getDocs(query(collection(db,'posts'),      orderBy('xDate','desc'))),
-    getDocs(query(collection(db,'myPosts'),    orderBy('created','desc'))),
+  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}; aiTools = {}; manualDrafts = {}
+  const [ps, ms, rs, ns, tgs, tgw, ks, at, cfg, ait, md] = await Promise.all([
+    getDocs(query(collection(db,'posts'),         orderBy('xDate','desc'))),
+    getDocs(query(collection(db,'myPosts'),       orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
-    getDocs(query(collection(db,'notes'),      orderBy('created','desc'))),
-    getDocs(query(collection(db,'tgSignals'),  orderBy('addedAt','desc'))),
-    getDocs(query(collection(db,'tgWpisy'),    orderBy('addedAt','desc'))),
+    getDocs(query(collection(db,'notes'),         orderBy('created','desc'))),
+    getDocs(query(collection(db,'tgSignals'),     orderBy('addedAt','desc'))),
+    getDocs(query(collection(db,'tgWpisy'),       orderBy('addedAt','desc'))),
     getDocs(collection(db,'konta')),
-    getDocs(query(collection(db,'airdropTasks'), orderBy('addedAt','desc'))),
+    getDocs(query(collection(db,'airdropTasks'),  orderBy('addedAt','desc'))),
     getDoc(doc(db,'airdropConfig','settings')),
-    getDocs(query(collection(db,'aiTools'),    orderBy('addedAt','desc'))),
+    getDocs(query(collection(db,'aiTools'),       orderBy('addedAt','desc'))),
+    getDocs(query(collection(db,'manualDrafts'),  orderBy('addedAt','desc'))),
   ])
-  ps.forEach(d  => { posts[d.id]        = d.data() })
-  ms.forEach(d  => { myPosts[d.id]      = d.data() })
-  rs.forEach(d  => { refLinks[d.id]     = d.data() })
-  ns.forEach(d  => { notes[d.id]        = d.data() })
-  tgs.forEach(d => { tgSignals[d.id]    = d.data() })
-  tgw.forEach(d => { tgWpisy[d.id]      = d.data() })
-  ks.forEach(d  => { konta[d.id]        = d.data() })
-  at.forEach(d  => { airdropTasks[d.id] = d.data() })
-  ait.forEach(d => { aiTools[d.id]      = d.data() })
+  ps.forEach(d  => { posts[d.id]         = d.data() })
+  ms.forEach(d  => { myPosts[d.id]       = d.data() })
+  rs.forEach(d  => { refLinks[d.id]      = d.data() })
+  ns.forEach(d  => { notes[d.id]         = d.data() })
+  tgs.forEach(d => { tgSignals[d.id]     = d.data() })
+  tgw.forEach(d => { tgWpisy[d.id]       = d.data() })
+  ks.forEach(d  => { konta[d.id]         = d.data() })
+  at.forEach(d  => { airdropTasks[d.id]  = d.data() })
+  ait.forEach(d => { aiTools[d.id]       = d.data() })
+  md.forEach(d  => { manualDrafts[d.id]  = d.data() })
   // Wczytaj customowe statusy/typy jeśli istnieją
   if (cfg.exists()) {
     const data = cfg.data()
@@ -2992,18 +2995,17 @@ NIE dodawaj żadnych komentarzy ani opisów od siebie. Przepisz tylko sam tekst.
 
     if (!text.trim()) { toast('Nie udało się odczytać tekstu ze zdjęcia'); return }
 
-    // Wstaw tekst do formularza "Dodaj ręcznie"
-    const textarea = document.getElementById('manual-text')
-    if (textarea) {
-      textarea.value = text.trim()
-      // Pokaż formularz jeśli schowany
-      const form = document.getElementById('manual-form')
-      if (form && form.style.display === 'none') toggleManualForm(true)
-    }
+    // Zapisz jako szkic do manualDrafts
+    const docId = 'mdraft_' + uid()
+    const entry = { id: docId, text: text.trim(), account: '', xLink: '', note: '', addedAt: nowStr(), fromImage: true }
+    await setDoc(doc(db, 'manualDrafts', docId), entry)
+    manualDrafts[docId] = entry
+    renderManualDrafts()
+    updateManualDraftsBadge()
 
-    if (statusEl) statusEl.textContent = '✅ Tekst wyciągnięty!'
+    if (statusEl) statusEl.textContent = '✅ Szkic zapisany!'
     setTimeout(() => { if (statusEl) statusEl.textContent = '' }, 3000)
-    toast('📸 Tekst ze zdjęcia wklejony do formularza ✓')
+    toast('📸 Tekst ze zdjęcia zapisany jako szkic ✓')
   } catch(e) {
     console.error('[extractTextFromImage]', e)
     if (statusEl) statusEl.textContent = '❌ Błąd: ' + e.message
@@ -3012,6 +3014,118 @@ NIE dodawaj żadnych komentarzy ani opisów od siebie. Przepisz tylko sam tekst.
     if (btn) btn.disabled = false
     input.value = '' // reset input
   }
+}
+
+// ── MANUAL DRAFTS ─────────────────────────────────────────────────
+function updateManualDraftsBadge() {
+  const n = Object.keys(manualDrafts).length
+  const b = document.getElementById('manual-drafts-badge')
+  if (b) { b.textContent = n; b.style.display = n > 0 ? 'inline-block' : 'none' }
+}
+
+function renderManualDrafts() {
+  const el = document.getElementById('manual-drafts-list')
+  if (!el) return
+  const list = Object.entries(manualDrafts)
+    .sort(([,a],[,b]) => (b.addedAt||'').localeCompare(a.addedAt||''))
+
+  updateManualDraftsBadge()
+
+  if (!list.length) {
+    el.innerHTML = '<div class="empty" style="margin-top:8px">Brak szkiców. Dodaj zdjęcie lub utwórz szkic ręcznie.</div>'
+    return
+  }
+
+  el.innerHTML = list.map(([docId, d]) => {
+    const editing = !!d._editing
+    return `
+    <div class="form-card" style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-size:11px;color:var(--text3)">📅 ${d.addedAt||''}</span>
+        ${d.fromImage ? '<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:rgba(0,229,255,.1);color:var(--neon);border:1px solid rgba(0,229,255,.2)">📸 Ze zdjęcia</span>' : ''}
+        <div style="display:flex;gap:4px;margin-left:auto">
+          ${editing
+            ? `<button class="btn btn-primary" style="font-size:11px;padding:3px 8px" onclick="saveDraftEdit('${docId}')">💾 Zapisz</button>
+               <button class="btn" style="font-size:11px;padding:3px 8px" onclick="cancelDraftEdit('${docId}')">Anuluj</button>`
+            : `<button class="btn" style="font-size:11px;padding:3px 8px" onclick="startDraftEdit('${docId}')">✏️ Edytuj</button>`
+          }
+          <button class="btn btn-success" style="font-size:11px;padding:3px 8px" onclick="sendDraftToWpisy('${docId}')">✉ Wyślij do Wpisów</button>
+          <button class="btn btn-danger" style="font-size:11px;padding:3px 8px" onclick="deleteDraft('${docId}')">✕</button>
+        </div>
+      </div>
+      ${editing ? `
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <textarea class="form-textarea" id="draft-text-${docId}" style="min-height:100px">${d.text||''}</textarea>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <input class="form-input" id="draft-account-${docId}" placeholder="Konto / źródło (bez @)" value="${d.account||''}">
+            <input class="form-input" id="draft-link-${docId}" placeholder="Link (opcjonalnie)" value="${d.xLink||''}">
+          </div>
+          <input class="form-input" id="draft-note-${docId}" placeholder="Notatka (opcjonalnie)" value="${d.note||''}">
+        </div>` : `
+        <div style="font-size:13px;color:var(--text2);line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow:hidden" id="draft-preview-${docId}">${d.text||''}</div>
+        ${(d.text||'').length > 300 ? `<button class="at-expand-btn" onclick="toggleDraftPreview('${docId}')"><span class="at-expand-icon">▼</span> więcej</button>` : ''}
+        ${d.account ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">@${d.account}</div>` : ''}
+      `}
+    </div>`
+  }).join('')
+}
+
+function startDraftEdit(docId)  { if (manualDrafts[docId]) { manualDrafts[docId]._editing = true;  renderManualDrafts() } }
+function cancelDraftEdit(docId) { if (manualDrafts[docId]) { manualDrafts[docId]._editing = false; renderManualDrafts() } }
+
+async function saveDraftEdit(docId) {
+  const d = manualDrafts[docId]; if (!d) return
+  d.text    = document.getElementById(`draft-text-${docId}`)?.value    || ''
+  d.account = document.getElementById(`draft-account-${docId}`)?.value.trim() || ''
+  d.xLink   = document.getElementById(`draft-link-${docId}`)?.value.trim()    || ''
+  d.note    = document.getElementById(`draft-note-${docId}`)?.value.trim()    || ''
+  d._editing = false
+  const save = {...d}; delete save._editing
+  await setDoc(doc(db, 'manualDrafts', docId), save)
+  renderManualDrafts()
+  toast('Szkic zaktualizowany ✓')
+}
+
+async function sendDraftToWpisy(docId) {
+  const d = manualDrafts[docId]; if (!d) return
+  if (!d.text?.trim()) { toast('Szkic nie ma treści!'); return }
+  const id  = 'manual_' + uid()
+  const now = nowStr()
+  const post = {
+    id, account: d.account || 'ręczny',
+    xDate: now, xLink: d.xLink || '',
+    text: d.text.trim(),
+    links: [], imgs: [], isRT: false,
+    para: '', note: d.note || '',
+    status: 'Nowy', addedAt: now, manualEntry: true
+  }
+  await setDoc(doc(db, 'posts', id), post)
+  posts[id] = post
+  // Usuń szkic
+  await deleteDoc(doc(db, 'manualDrafts', docId))
+  delete manualDrafts[docId]
+  renderManualDrafts()
+  renderMain(); updateStats(); updateBadges()
+  toast('✉ Wysłano do Wpisów ✓')
+}
+
+async function deleteDraft(docId) {
+  if (!confirm('Usunąć ten szkic?')) return
+  await deleteDoc(doc(db, 'manualDrafts', docId))
+  delete manualDrafts[docId]
+  renderManualDrafts()
+  toast('Usunięto szkic ✓')
+}
+
+function toggleDraftPreview(docId) {
+  const el  = document.getElementById(`draft-preview-${docId}`)
+  const btn = el?.nextElementSibling
+  if (!el) return
+  const collapsed = el.style.maxHeight === '120px' || !el.style.maxHeight
+  el.style.maxHeight = collapsed ? 'none' : '120px'
+  if (btn) btn.innerHTML = collapsed
+    ? '<span class="at-expand-icon">▲</span> mniej'
+    : '<span class="at-expand-icon">▼</span> więcej'
 }
 
 // ── BUILD HTML ────────────────────────────────────────────────────
@@ -3195,12 +3309,15 @@ function buildApp() {
           </div>
         </div>
       </div>
-      <div style="margin-top:24px;padding:16px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl)">
-        <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:8px;text-transform:uppercase">Jak to działa?</div>
-        <div style="font-size:13px;color:var(--text2);line-height:1.6">
-          Post dodany ręcznie trafi do zakładki <strong style="color:var(--text)">Wpisy</strong> z zielonym badge'm <span style="font-size:11px;padding:1px 6px;border-radius:4px;background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.3)">✍ Ręczny</span>.<br>
-          Ma wszystkie funkcje jak posty pobrane przez bota — parafrazę, notatki, statusy, AI.
+
+      <!-- Szkice -->
+      <div style="margin-top:20px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <span style="font-size:14px;font-weight:700;color:var(--text)">Szkice</span>
+          <span id="manual-drafts-badge" style="display:none;font-size:11px;padding:1px 7px;border-radius:8px;background:rgba(0,229,255,.12);color:var(--neon);border:1px solid rgba(0,229,255,.25);font-weight:700">0</span>
+          <span style="font-size:12px;color:var(--text3)">— wpisy ze zdjęć i szkice ręczne czekające na wysłanie</span>
         </div>
+        <div id="manual-drafts-list"></div>
       </div>
     </div>
 
@@ -3796,6 +3913,7 @@ Object.assign(window, {
   triggerAIPara,
   renderArchProjekty, restoreArchP, deleteArchP, restoreAllArchP, deleteAllArchP,
   toggleManualForm, addManualPost, extractTextFromImage,
+  renderManualDrafts, startDraftEdit, cancelDraftEdit, saveDraftEdit, sendDraftToWpisy, deleteDraft, toggleDraftPreview,
   renderAiTools, toggleAitForm, openAitEdit, saveAiTool, deleteAiTool,
   renderStats,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
@@ -3814,7 +3932,7 @@ onAuthStateChanged(auth, async user => {
     await loadAll()
     await loadEmojis()
     renderEmojiPanel()
-    renderMain(); renderMoje(); renderNotes(); renderRef(); renderKonta(); renderAirdrop(); renderAiTools()
+    renderMain(); renderMoje(); renderNotes(); renderRef(); renderKonta(); renderAirdrop(); renderAiTools(); renderManualDrafts()
     updateStats(); updateBadges()
     await syncSheets()
     setInterval(syncSheets, 5 * 60 * 1000)
