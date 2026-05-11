@@ -580,7 +580,7 @@ function switchSubTab(name) {
   const pageEl = document.getElementById(`sub-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {archiwum:renderArchive, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, kalendarz:renderKalendarz, ustawienia:renderAtSettings}
+  const fn = {archiwum:renderArchive, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, kalendarz:renderKalendarz, ustawienia:renderAtSettings, archprojekty:renderArchProjekty}
   if (fn[name]) fn[name]()
 }
 
@@ -686,7 +686,7 @@ function renderMain() {
     return `<div class="card" id="card-${p.id}">
       <div class="card-head">
         <input type="checkbox" class="main-chk" ${mainSelected.has(p.id)?'checked':''} onchange="mainToggleOne('${p.id}',this.checked)" style="width:15px;height:15px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0;margin-right:2px">
-        <span class="account">@${p.account}</span>
+        <span class="account" onclick="showAccountPanel('${p.account}')" style="cursor:pointer;text-decoration:underline dotted" title="Kliknij — podgląd wpisów tego konta">@${p.account}</span>
         ${(()=>{ const n=Object.values(posts).filter(x=>x.account===p.account&&x.status==='Nowy').length; return n>1?`<span style="font-size:10px;padding:1px 5px;border-radius:8px;background:rgba(0,229,255,.12);color:var(--neon);border:1px solid rgba(0,229,255,.25);font-weight:700" title="Nowych wpisów tego konta">${n}</span>`:''; })()}
         ${(p.isRT || (p.account&&p.account.includes(' RT @'))) ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
         ${p.manualEntry ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.3);font-weight:700">✍ Ręczny</span>' : ''}
@@ -847,6 +847,78 @@ Odpowiedz WYŁĄCZNIE w formacie JSON bez żadnego dodatkowego tekstu ani backti
   if (btn) { btn.disabled = false; btn.textContent = '✅ Dodano!' }
   setTimeout(() => { if (btn) btn.textContent = '🪂 Dodaj do Projektów' }, 2500)
   toast(`🪂 Dodano projekt "${project}" ✓`)
+}
+
+// ── PODGLĄD PROFILU KONTA ────────────────────────────────────────
+function showAccountPanel(account) {
+  // Usuń stary panel jeśli istnieje
+  document.getElementById('account-panel')?.remove()
+
+  const accountPosts = Object.values(posts)
+    .filter(p => p.account === account && p.status !== 'Odrzucone')
+    .sort((a,b) => (b.xDate||'').localeCompare(a.xDate||''))
+
+  const counts = {
+    nowy:         accountPosts.filter(p => p.status === 'Nowy').length,
+    doZrobienia:  accountPosts.filter(p => p.status === 'Do zrobienia').length,
+    wToku:        accountPosts.filter(p => p.status === 'W toku').length,
+    opublikowane: accountPosts.filter(p => p.status === 'Opublikowane').length,
+  }
+
+  const panel = document.createElement('div')
+  panel.id = 'account-panel'
+  panel.innerHTML = `
+    <div id="account-panel-bg" onclick="closeAccountPanel()" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999"></div>
+    <div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1000;
+      width:min(600px,95vw);max-height:80vh;overflow-y:auto;
+      background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);
+      box-shadow:0 8px 40px rgba(0,0,0,.5);display:flex;flex-direction:column">
+      <!-- Nagłówek -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border2);position:sticky;top:0;background:var(--bg2);z-index:2">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:var(--neon)">@${account}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">
+            ${accountPosts.length} wpisów aktywnych
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <a href="https://x.com/${account}" target="_blank" class="btn" style="font-size:11px;padding:4px 10px">Otwórz na X ↗</a>
+          <button onclick="closeAccountPanel()" style="background:none;border:none;color:var(--text3);font-size:20px;cursor:pointer;padding:0 4px;line-height:1">✕</button>
+        </div>
+      </div>
+      <!-- Statsy -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:12px 16px;border-bottom:1px solid var(--border)">
+        <div class="stat"><div class="stat-n" style="color:#f59e0b;font-size:18px">${counts.nowy}</div><div class="stat-l">Nowe</div></div>
+        <div class="stat"><div class="stat-n" style="color:var(--neon);font-size:18px">${counts.doZrobienia}</div><div class="stat-l">Do zrobienia</div></div>
+        <div class="stat"><div class="stat-n" style="color:#a78bfa;font-size:18px">${counts.wToku}</div><div class="stat-l">W toku</div></div>
+        <div class="stat"><div class="stat-n" style="color:#10b981;font-size:18px">${counts.opublikowane}</div><div class="stat-l">Opublikowane</div></div>
+      </div>
+      <!-- Lista wpisów -->
+      <div style="padding:12px 16px;display:flex;flex-direction:column;gap:10px">
+        ${accountPosts.length === 0
+          ? '<div class="empty">Brak aktywnych wpisów.</div>'
+          : accountPosts.slice(0,15).map(p => `
+            <div style="background:var(--bg3);border-radius:var(--r);padding:10px 12px;border:1px solid var(--border)">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px">
+                <span style="font-size:11px;color:var(--text3)">📅 ${p.xDate||''}</span>
+                <span style="font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;${statusStyle(p.status)}">${p.status}</span>
+              </div>
+              <div style="font-size:12px;color:var(--text2);line-height:1.5;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">${p.text}</div>
+              ${p.xLink ? `<a href="${p.xLink}" target="_blank" style="font-size:11px;color:var(--neon);text-decoration:none;margin-top:5px;display:inline-block">Otwórz na X ↗</a>` : ''}
+            </div>`).join('')
+        }
+        ${accountPosts.length > 15 ? `<div style="text-align:center;font-size:12px;color:var(--text3)">... i ${accountPosts.length-15} więcej wpisów</div>` : ''}
+      </div>
+    </div>`
+  document.body.appendChild(panel)
+
+  // Zamknij klawiszem Escape
+  const escHandler = e => { if (e.key === 'Escape') { closeAccountPanel(); document.removeEventListener('keydown', escHandler) } }
+  document.addEventListener('keydown', escHandler)
+}
+
+function closeAccountPanel() {
+  document.getElementById('account-panel')?.remove()
 }
 
 // ── MAIN BULK SELECT ─────────────────────────────────────────────
@@ -2631,6 +2703,110 @@ function renderStats() {
     </div>`
 }
 
+// ── ARCHIWUM PROJEKTÓW ───────────────────────────────────────────
+function renderArchProjekty() {
+  const el = document.getElementById('archp-content')
+  if (!el) return
+
+  const hidden = Object.entries(airdropTasks)
+    .filter(([,p]) => p.hidden)
+    .sort(([,a],[,b]) => (b.excelRow||0) - (a.excelRow||0))
+
+  // Statystyki ukrytych
+  const byType   = {}
+  const byStatus = {}
+  hidden.forEach(([,p]) => {
+    const t = p.type   || 'Brak'; byType[t]   = (byType[t]  ||0)+1
+    const s = p.status || 'Brak'; byStatus[s] = (byStatus[s]||0)+1
+  })
+
+  if (!hidden.length) {
+    el.innerHTML = '<div class="empty">Brak ukrytych projektów.</div>'
+    return
+  }
+
+  el.innerHTML = `
+    <!-- Statystyki -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:16px">
+      <div class="form-card" style="padding:12px">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:8px;font-weight:700;text-transform:uppercase;letter-spacing:.05em">Ukryte łącznie</div>
+        <div style="font-size:28px;font-weight:700;color:var(--neon)">${hidden.length}</div>
+      </div>
+      <div class="form-card" style="padding:12px">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:6px;font-weight:700;text-transform:uppercase;letter-spacing:.05em">Typy</div>
+        ${Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([t,n])=>
+          `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px">
+            <span style="color:var(--text2)">${t}</span><span style="color:var(--neon);font-weight:700">${n}</span>
+          </div>`).join('')}
+      </div>
+      <div class="form-card" style="padding:12px">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:6px;font-weight:700;text-transform:uppercase;letter-spacing:.05em">Statusy</div>
+        ${Object.entries(byStatus).sort((a,b)=>b[1]-a[1]).map(([s,n])=>
+          `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px">
+            <span style="color:var(--text2)">${s}</span><span style="color:var(--neon4);font-weight:700">${n}</span>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- Akcje masowe -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-primary" onclick="restoreAllArchP()">👁 Przywróć wszystkie (${hidden.length})</button>
+      <button class="btn btn-danger"  onclick="deleteAllArchP()">🗑 Usuń wszystkie na stałe</button>
+    </div>
+
+    <!-- Lista -->
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${hidden.map(([docId, p]) => `
+        <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;opacity:.75">
+          <span style="font-size:11px;color:var(--text3);min-width:36px;font-weight:700">#${p.excelRow||'—'}</span>
+          <span style="font-weight:700;color:var(--text);flex:1;min-width:100px">${p.project||'(brak nazwy)'}</span>
+          ${p.type   ? `<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">${p.type}</span>` : ''}
+          ${p.status ? `<span style="font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;${atStatusStyle(p.status)}">${p.status}</span>` : ''}
+          <div style="display:flex;gap:6px;margin-left:auto">
+            <button class="btn btn-primary" style="font-size:11px;padding:3px 10px" onclick="restoreArchP('${docId}')">👁 Przywróć</button>
+            <button class="btn btn-danger"  style="font-size:11px;padding:3px 10px" onclick="deleteArchP('${docId}')">🗑 Usuń</button>
+          </div>
+        </div>`).join('')}
+    </div>`
+}
+
+async function restoreArchP(docId) {
+  if (!airdropTasks[docId]) return
+  airdropTasks[docId].hidden = false
+  await updateDoc(doc(db, 'airdropTasks', docId), { hidden: false })
+  renderArchProjekty(); updateBadges()
+  toast('👁 Przywrócono projekt ✓')
+}
+
+async function deleteArchP(docId) {
+  if (!confirm('Usunąć projekt na stałe?')) return
+  await deleteDoc(doc(db, 'airdropTasks', docId))
+  delete airdropTasks[docId]
+  renderArchProjekty(); updateBadges()
+  toast('Usunięto ✓')
+}
+
+async function restoreAllArchP() {
+  const hidden = Object.entries(airdropTasks).filter(([,p]) => p.hidden)
+  if (!hidden.length) return
+  await Promise.all(hidden.map(([id]) => {
+    airdropTasks[id].hidden = false
+    return updateDoc(doc(db, 'airdropTasks', id), { hidden: false })
+  }))
+  renderArchProjekty(); updateBadges()
+  toast(`👁 Przywrócono ${hidden.length} projektów ✓`)
+}
+
+async function deleteAllArchP() {
+  const hidden = Object.entries(airdropTasks).filter(([,p]) => p.hidden)
+  if (!hidden.length) return
+  if (!confirm(`Usunąć na stałe ${hidden.length} ukrytych projektów? Tej operacji nie można cofnąć.`)) return
+  await Promise.all(hidden.map(([id]) => deleteDoc(doc(db, 'airdropTasks', id))))
+  hidden.forEach(([id]) => delete airdropTasks[id])
+  renderArchProjekty(); updateBadges()
+  toast(`Usunięto ${hidden.length} projektów ✓`)
+}
+
 // ── BUILD HTML ────────────────────────────────────────────────────
 function buildApp() {
   document.getElementById('app').innerHTML = `
@@ -2945,6 +3121,7 @@ function buildApp() {
         <button class="subtab"        data-subtab="tgwpisy"   onclick="switchSubTab('tgwpisy')">📋 TG Wpisy <span class="tab-badge" id="tab-tgwpisy-badge" style="background:rgba(124,58,237,.25);color:#a78bfa">0</span></button>
         <button class="subtab"        data-subtab="kalendarz"   onclick="switchSubTab('kalendarz')">Kalendarz</button>
         <button class="subtab"        data-subtab="ustawienia"  onclick="switchSubTab('ustawienia')">⚙️ Ustawienia</button>
+        <button class="subtab"        data-subtab="archprojekty" onclick="switchSubTab('archprojekty')">📦 Archiwum projektów</button>
       </div>
 
       <!-- ARCHIWUM (podzakładka) -->
@@ -3003,6 +3180,10 @@ function buildApp() {
 
       <div id="sub-ustawienia" class="subpage">
         <div class="loading">Ładowanie ustawień...</div>
+      </div>
+
+      <div id="sub-archprojekty" class="subpage">
+        <div id="archp-content"><div class="loading">Ładowanie...</div></div>
       </div>
 
     </div><!-- /page-wiecej -->
@@ -3305,6 +3486,7 @@ Object.assign(window, {
   loginGoogle, logout, switchTab, switchSubTab, syncSheets,
   renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText, addToProjects, callAIJson,
   mainToggleOne, updateMainBulkBar, deleteMainSelected,
+  showAccountPanel, closeAccountPanel,
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
   addMyPost, toggleMyForm, publishMyPost, deleteMyPost, saveMyNote,
   renderArchive, restorePost, toggleArchExpand,
@@ -3317,6 +3499,7 @@ Object.assign(window, {
   renderKonta, toggleKatForm, addKategoria, startKatEdit, cancelKatEdit, saveKatEdit, deleteKategoria,
   addAccount, startAccEdit, cancelAccEdit, saveAccEdit, deleteAccount,
   triggerAIPara,
+  renderArchProjekty, restoreArchP, deleteArchP, restoreAllArchP, deleteAllArchP,
   toggleManualForm, addManualPost,
   renderStats,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
