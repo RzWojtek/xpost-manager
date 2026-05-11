@@ -318,7 +318,8 @@ let notes      = {}
 let tgSignals  = {}
 let tgWpisy    = {}
 let konta      = {}   // kategorie kont: { katId: { id, name, icon, note, accounts: [{id,name,note}] } }
-let airdropTasks = {} // projekty airdrop/testnet: { docId: { id, status, type, project, tasks, date, socialLink, testnetLinks, wallet, imgUrl, note, addedAt } }
+let airdropTasks = {}
+let aiTools      = {} // narzędzia AI: { docId: { id, name, desc, category, free, url, rating, tags, addedAt } } // projekty airdrop/testnet: { docId: { id, status, type, project, tasks, date, socialLink, testnetLinks, wallet, imgUrl, note, addedAt } }
 let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
 
 // Filter state — zarządzane lokalnie
@@ -482,8 +483,8 @@ async function logout() {
 
 // ── FIREBASE LOAD ─────────────────────────────────────────────────
 async function loadAll() {
-  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}
-  const [ps, ms, rs, ns, tgs, tgw, ks, at, cfg] = await Promise.all([
+  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}; aiTools = {}
+  const [ps, ms, rs, ns, tgs, tgw, ks, at, cfg, ait] = await Promise.all([
     getDocs(query(collection(db,'posts'),      orderBy('xDate','desc'))),
     getDocs(query(collection(db,'myPosts'),    orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
@@ -493,6 +494,7 @@ async function loadAll() {
     getDocs(collection(db,'konta')),
     getDocs(query(collection(db,'airdropTasks'), orderBy('addedAt','desc'))),
     getDoc(doc(db,'airdropConfig','settings')),
+    getDocs(query(collection(db,'aiTools'),    orderBy('addedAt','desc'))),
   ])
   ps.forEach(d  => { posts[d.id]        = d.data() })
   ms.forEach(d  => { myPosts[d.id]      = d.data() })
@@ -502,6 +504,7 @@ async function loadAll() {
   tgw.forEach(d => { tgWpisy[d.id]      = d.data() })
   ks.forEach(d  => { konta[d.id]        = d.data() })
   at.forEach(d  => { airdropTasks[d.id] = d.data() })
+  ait.forEach(d => { aiTools[d.id]      = d.data() })
   // Wczytaj customowe statusy/typy jeśli istnieją
   if (cfg.exists()) {
     const data = cfg.data()
@@ -564,7 +567,7 @@ function switchTab(name) {
   const pageEl = document.getElementById(`page-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats}
+  const fn = {main:renderMain, moje:renderMoje, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools}
   if (fn[name]) fn[name]()
   // Wiecej — renderuj aktywną podzakładkę
   if (name === 'wiecej') {
@@ -2807,6 +2810,210 @@ async function deleteAllArchP() {
   toast(`Usunięto ${hidden.length} projektów ✓`)
 }
 
+// ── AI TOOLS ─────────────────────────────────────────────────────
+const AI_CATEGORIES = ['Tekst','Obraz','Wideo','Audio','Kod','Analiza','Crypto/Web3','Inne']
+
+let aiToolSearch = ''
+let aiToolCat    = ''
+let aiToolFree   = ''
+let aiToolEditId = ''
+
+function renderAiTools() {
+  const el = document.getElementById('page-aitools')
+  if (!el) return
+
+  const searchEl = document.getElementById('ait-search')
+  const catEl    = document.getElementById('ait-cat')
+  const freeEl   = document.getElementById('ait-free')
+  if (searchEl) aiToolSearch = searchEl.value.toLowerCase()
+  if (catEl)    aiToolCat    = catEl.value
+  if (freeEl)   aiToolFree   = freeEl.value
+
+  const list = Object.entries(aiTools).filter(([,t]) => {
+    if (aiToolCat  && t.category !== aiToolCat) return false
+    if (aiToolFree === 'tak'  && !t.free) return false
+    if (aiToolFree === 'nie'  &&  t.free) return false
+    if (aiToolSearch) {
+      const hay = [t.name, t.desc, t.tags, t.category].join(' ').toLowerCase()
+      if (!hay.includes(aiToolSearch)) return false
+    }
+    return true
+  }).sort(([,a],[,b]) => (b.addedAt||'').localeCompare(a.addedAt||''))
+
+  const formEl = document.getElementById('ait-form')
+  const cards  = document.getElementById('ait-cards')
+  if (!cards) return
+
+  if (!list.length) {
+    cards.innerHTML = '<div class="empty">Brak narzędzi. Dodaj pierwsze!</div>'
+    return
+  }
+
+  cards.innerHTML = list.map(([docId, t]) => `
+    <div class="form-card" style="position:relative">
+      <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:180px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+            <span style="font-size:15px;font-weight:700;color:var(--text)">${t.name}</span>
+            <span style="font-size:10px;padding:2px 7px;border-radius:10px;background:rgba(0,229,255,.1);color:var(--neon);border:1px solid rgba(0,229,255,.2);font-weight:700">${t.category||'Inne'}</span>
+            <span style="font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700;${t.free ? 'background:rgba(16,185,129,.12);color:#10b981;border:1px solid rgba(16,185,129,.25)' : 'background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.2)'}">${t.free ? '✓ Darmowe' : '$ Płatne'}</span>
+            ${t.rating ? `<span style="font-size:12px;color:#f59e0b">${'★'.repeat(Math.min(5,t.rating))}${'☆'.repeat(5-Math.min(5,t.rating))}</span>` : ''}
+          </div>
+          <div style="font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:8px">${(t.desc||'').replace(/\n/g,'<br>')}</div>
+          ${t.tags ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">${t.tags.split(',').map(tag=>`<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:var(--bg3);color:var(--text3);border:1px solid var(--border)">${tag.trim()}</span>`).join('')}</div>` : ''}
+          ${t.url ? `<a href="${t.url}" target="_blank" style="font-size:12px;color:var(--neon);text-decoration:none">🔗 ${t.url.replace(/^https?:\/\//,'').slice(0,50)}</a>` : ''}
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          <button class="btn" style="font-size:11px;padding:3px 8px" onclick="openAitEdit('${docId}')">✏️</button>
+          <button class="btn btn-danger" style="font-size:11px;padding:3px 8px" onclick="deleteAiTool('${docId}')">✕</button>
+        </div>
+      </div>
+    </div>`).join('')
+}
+
+function toggleAitForm(show) {
+  const f = document.getElementById('ait-form')
+  const b = document.getElementById('btn-add-ait')
+  if (!f || !b) return
+  if (show === undefined) show = f.style.display === 'none'
+  f.style.display = show ? 'block' : 'none'
+  b.textContent   = show ? '✕ Zamknij' : '+ Dodaj narzędzie'
+  if (show && !aiToolEditId) {
+    ;['ait-f-name','ait-f-desc','ait-f-url','ait-f-tags'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = ''
+    })
+    const cat = document.getElementById('ait-f-cat'); if (cat) cat.value = ''
+    const fr  = document.getElementById('ait-f-free'); if (fr) fr.checked = true
+    const rt  = document.getElementById('ait-f-rating'); if (rt) rt.value = '0'
+    const tit = document.getElementById('ait-form-title'); if (tit) tit.textContent = 'Nowe narzędzie AI'
+    aiToolEditId = ''
+  }
+}
+
+function openAitEdit(docId) {
+  const t = aiTools[docId]
+  if (!t) return
+  aiToolEditId = docId
+  toggleAitForm(true)
+  document.getElementById('ait-f-name').value  = t.name    || ''
+  document.getElementById('ait-f-desc').value  = t.desc    || ''
+  document.getElementById('ait-f-url').value   = t.url     || ''
+  document.getElementById('ait-f-tags').value  = t.tags    || ''
+  document.getElementById('ait-f-cat').value   = t.category|| ''
+  document.getElementById('ait-f-free').checked = !!t.free
+  document.getElementById('ait-f-rating').value = t.rating || '0'
+  const tit = document.getElementById('ait-form-title'); if (tit) tit.textContent = 'Edytuj narzędzie'
+  document.getElementById('ait-form').scrollIntoView({ behavior:'smooth', block:'start' })
+}
+
+async function saveAiTool() {
+  const name = document.getElementById('ait-f-name')?.value.trim()
+  if (!name) { toast('Podaj nazwę narzędzia!'); return }
+  const docId = aiToolEditId || ('ait_' + uid())
+  const entry = {
+    id:       docId,
+    name,
+    desc:     document.getElementById('ait-f-desc')?.value.trim()    || '',
+    url:      document.getElementById('ait-f-url')?.value.trim()     || '',
+    tags:     document.getElementById('ait-f-tags')?.value.trim()    || '',
+    category: document.getElementById('ait-f-cat')?.value            || 'Inne',
+    free:     document.getElementById('ait-f-free')?.checked         ?? true,
+    rating:   parseInt(document.getElementById('ait-f-rating')?.value)|| 0,
+    addedAt:  aiToolEditId ? (aiTools[aiToolEditId]?.addedAt || nowStr()) : nowStr(),
+  }
+  await setDoc(doc(db, 'aiTools', docId), entry)
+  aiTools[docId] = entry
+  aiToolEditId = ''
+  toggleAitForm(false)
+  renderAiTools()
+  toast(aiToolEditId ? 'Zaktualizowano ✓' : 'Dodano narzędzie ✓')
+}
+
+async function deleteAiTool(docId) {
+  if (!confirm('Usunąć to narzędzie?')) return
+  await deleteDoc(doc(db, 'aiTools', docId))
+  delete aiTools[docId]
+  renderAiTools()
+  toast('Usunięto ✓')
+}
+
+// ── ZDJĘCIE → TEKST (Gemini Vision) ──────────────────────────────
+async function extractTextFromImage(input) {
+  const file = input.files?.[0]
+  if (!file) return
+  const statusEl = document.getElementById('img-extract-status')
+  const btn      = document.getElementById('btn-img-extract')
+  if (statusEl) statusEl.textContent = '⏳ Analizuję zdjęcie...'
+  if (btn)      btn.disabled = true
+
+  try {
+    // Konwertuj do base64
+    const base64 = await new Promise((res, rej) => {
+      const reader = new FileReader()
+      reader.onload  = () => res(reader.result.split(',')[1])
+      reader.onerror = rej
+      reader.readAsDataURL(file)
+    })
+    const mimeType = file.type || 'image/jpeg'
+
+    // Wyślij do Gemini Vision
+    const key = import.meta.env.VITE_GEMINI_API_KEY
+    if (!key) { toast('Brak klucza VITE_GEMINI_API_KEY!'); return }
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              {
+                text: `Przepisz DOKŁADNIE cały tekst widoczny na tym zdjęciu/screenshocie. 
+Zachowaj:
+- oryginalne formatowanie (nowe linie, akapity, odstępy)
+- wszystkie emoji, symbole, znaki specjalne
+- oryginalną kolejność elementów
+- wszystkie linki URL jeśli są widoczne
+NIE dodawaj żadnych komentarzy ani opisów od siebie. Przepisz tylko sam tekst.`
+              },
+              {
+                inline_data: { mime_type: mimeType, data: base64 }
+              }
+            ]
+          }]
+        })
+      }
+    )
+
+    if (!res.ok) throw new Error('Błąd API: ' + res.status)
+    const data = await res.json()
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+
+    if (!text.trim()) { toast('Nie udało się odczytać tekstu ze zdjęcia'); return }
+
+    // Wstaw tekst do formularza "Dodaj ręcznie"
+    const textarea = document.getElementById('manual-text')
+    if (textarea) {
+      textarea.value = text.trim()
+      // Pokaż formularz jeśli schowany
+      const form = document.getElementById('manual-form')
+      if (form && form.style.display === 'none') toggleManualForm(true)
+    }
+
+    if (statusEl) statusEl.textContent = '✅ Tekst wyciągnięty!'
+    setTimeout(() => { if (statusEl) statusEl.textContent = '' }, 3000)
+    toast('📸 Tekst ze zdjęcia wklejony do formularza ✓')
+  } catch(e) {
+    console.error('[extractTextFromImage]', e)
+    if (statusEl) statusEl.textContent = '❌ Błąd: ' + e.message
+    toast('Błąd odczytu zdjęcia: ' + e.message)
+  } finally {
+    if (btn) btn.disabled = false
+    input.value = '' // reset input
+  }
+}
+
 // ── BUILD HTML ────────────────────────────────────────────────────
 function buildApp() {
   document.getElementById('app').innerHTML = `
@@ -2847,6 +3054,7 @@ function buildApp() {
       <button class="tab"        data-tab="manual"  onclick="switchTab('manual')">✍ Dodaj ręcznie</button>
       <button class="tab"        data-tab="airdrop" onclick="switchTab('airdrop')">🪂 Projekty <span class="tab-badge" id="tab-airdrop-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
       <button class="tab"        data-tab="stats"   onclick="switchTab('stats')">📊 Statystyki</button>
+      <button class="tab"        data-tab="aitools" onclick="switchTab('aitools')">🤖 AI</button>
       <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">Więcej ▾ <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
     </div>
 
@@ -2946,6 +3154,15 @@ function buildApp() {
       <div id="manual-form" style="display:none">
         <div class="form-card">
           <div class="form-title">Nowy post ręczny</div>
+          <!-- Przycisk: wyciągnij tekst ze zdjęcia -->
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:10px 12px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.15);border-radius:var(--r);flex-wrap:wrap">
+            <span style="font-size:12px;color:var(--text3);flex:1">📸 Masz screenshot? Wyciągnij tekst ze zdjęcia automatycznie</span>
+            <label class="btn btn-primary" style="cursor:pointer;position:relative;white-space:nowrap" id="btn-img-extract">
+              📸 Dodaj zdjęcie
+              <input type="file" accept="image/*" capture="environment" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="extractTextFromImage(this)">
+            </label>
+            <span id="img-extract-status" style="font-size:12px;color:var(--neon)"></span>
+          </div>
           <div class="form-row full">
             <div>
               <div class="form-label">Treść posta *</div>
@@ -3111,6 +3328,84 @@ function buildApp() {
     <!-- STATYSTYKI -->
     <div id="page-stats" class="page">
       <div id="stats-content"><div class="loading">Ładowanie statystyk...</div></div>
+    </div>
+
+    <!-- AI TOOLS -->
+    <div id="page-aitools" class="page">
+      <!-- Toolbar -->
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" id="btn-add-ait" onclick="toggleAitForm()" style="white-space:nowrap">+ Dodaj narzędzie</button>
+        <input id="ait-search" placeholder="🔍 Szukaj narzędzia..." oninput="renderAiTools()" style="flex:1;min-width:160px;padding:6px 10px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
+        <select id="ait-cat" onchange="renderAiTools()" style="padding:6px 10px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
+          <option value="">Wszystkie kategorie</option>
+          ${AI_CATEGORIES.map(c=>`<option>${c}</option>`).join('')}
+        </select>
+        <select id="ait-free" onchange="renderAiTools()" style="padding:6px 10px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
+          <option value="">Darmowe i płatne</option>
+          <option value="tak">Tylko darmowe</option>
+          <option value="nie">Tylko płatne</option>
+        </select>
+      </div>
+
+      <!-- Formularz -->
+      <div id="ait-form" style="display:none;margin-bottom:16px">
+        <div class="form-card">
+          <div class="form-title" id="ait-form-title">Nowe narzędzie AI</div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Nazwa *</div>
+              <input class="form-input" id="ait-f-name" placeholder="np. ChatGPT, Midjourney...">
+            </div>
+            <div>
+              <div class="form-label">Kategoria</div>
+              <select class="form-select" id="ait-f-cat">
+                <option value="">— wybierz —</option>
+                ${AI_CATEGORIES.map(c=>`<option>${c}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="form-row full">
+            <div>
+              <div class="form-label">Opis — co robi, jak używasz, uwagi</div>
+              <textarea class="form-textarea" id="ait-f-desc" style="min-height:80px" placeholder="Opisz do czego służy, jak go używasz, wskazówki..."></textarea>
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Link (URL)</div>
+              <input class="form-input" id="ait-f-url" placeholder="https://...">
+            </div>
+            <div>
+              <div class="form-label">Tagi (oddzielone przecinkami)</div>
+              <input class="form-input" id="ait-f-tags" placeholder="np. GPT, chat, pisanie">
+            </div>
+          </div>
+          <div class="form-row">
+            <div style="display:flex;align-items:center;gap:10px;padding-top:22px">
+              <input type="checkbox" id="ait-f-free" checked style="width:16px;height:16px;accent-color:var(--neon);cursor:pointer">
+              <label for="ait-f-free" style="font-size:13px;color:var(--text);cursor:pointer">Darmowe (lub ma free tier)</label>
+            </div>
+            <div>
+              <div class="form-label">Ocena (1-5)</div>
+              <select class="form-select" id="ait-f-rating">
+                <option value="0">— brak oceny —</option>
+                <option value="1">★ 1</option>
+                <option value="2">★★ 2</option>
+                <option value="3">★★★ 3</option>
+                <option value="4">★★★★ 4</option>
+                <option value="5">★★★★★ 5</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-btns">
+            <button class="btn btn-primary" onclick="saveAiTool()">Zapisz</button>
+            <button class="btn" onclick="toggleAitForm(false)">Anuluj</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Karty narzędzi -->
+      <div id="ait-cards"><div class="loading">Ładowanie...</div></div>
     </div>
 
     <!-- WIĘCEJ (mega-zakładka z podzakładkami) -->
@@ -3500,7 +3795,8 @@ Object.assign(window, {
   addAccount, startAccEdit, cancelAccEdit, saveAccEdit, deleteAccount,
   triggerAIPara,
   renderArchProjekty, restoreArchP, deleteArchP, restoreAllArchP, deleteAllArchP,
-  toggleManualForm, addManualPost,
+  toggleManualForm, addManualPost, extractTextFromImage,
+  renderAiTools, toggleAitForm, openAitEdit, saveAiTool, deleteAiTool,
   renderStats,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
   exportAtCsv, duplicateAt, atSetSort,
@@ -3518,7 +3814,7 @@ onAuthStateChanged(auth, async user => {
     await loadAll()
     await loadEmojis()
     renderEmojiPanel()
-    renderMain(); renderMoje(); renderNotes(); renderRef(); renderKonta(); renderAirdrop()
+    renderMain(); renderMoje(); renderNotes(); renderRef(); renderKonta(); renderAirdrop(); renderAiTools()
     updateStats(); updateBadges()
     await syncSheets()
     setInterval(syncSheets, 5 * 60 * 1000)
