@@ -786,40 +786,57 @@ async function addToProjects(postId) {
   const btn = document.querySelector(`button[onclick="addToProjects('${postId}')"]`)
   if (btn) { btn.disabled = true; btn.textContent = '⏳ AI analizuje...' }
 
-  let project = '', tasks = '', socialLink = p.xLink || ''
+  let project = '', tasks = '', socialLink = p.xLink || '', testnetLinks = '', entry_type = ''
+
+  // Wyciągnij wszystkie URL-e z treści tweeta z góry (niezależnie od AI)
+  const urlsInText = (p.text.match(/https?:\/\/[^\s"'<>]+/g) || [])
+    .filter(u => !u.includes('twitter.com') && !u.includes('x.com') && !u.includes('t.co/') === false || u.includes('t.co/'))
+    .filter((u,i,a) => a.indexOf(u) === i) // unikalne
 
   try {
-    const prompt = `Przeanalizuj ten tweet o projekcie crypto/Web3 i wyciągnij:
-1. "project" - nazwa projektu/protokołu (max 3 słowa, samo imię własne np. "Initia", "Monad", "Babylon")
-2. "tasks" - co konkretnie trzeba zrobić (lista zadań po jednym na linię, max 5 zadań, zacznij każde od "-")
+    const prompt = `Przeanalizuj ten tweet o projekcie crypto/Web3 i wyciągnij następujące pola:
+
+1. "project" - nazwa projektu/protokołu (max 3 słowa, samo imię własne np. "Initia", "Monad", "Babylon"; jeśli nie ma jednoznacznej nazwy użyj nazwy konta)
+2. "tasks" - co konkretnie trzeba zrobić (lista zadań po jednym na linię, max 5 zadań, zacznij każde od "-"; jeśli nie ma konkretnych zadań napisz "- Sprawdź projekt")
+3. "testnetLinks" - WSZYSTKIE linki URL znalezione w tweecie które prowadzą do aplikacji, testnetów, questów, formularzy, bridge'y itp. (każdy link w osobnej linii; pomiń linki do twitter.com, x.com oraz skrócone t.co które nie są rozwinięte)
+4. "type" - typ projektu: "Testnet", "Mainnet", "WL", "Airdrop" lub "Inne" (na podstawie kontekstu)
 
 Tweet: "${p.text}"
+Znalezione URL-e w tweecie: ${urlsInText.length ? urlsInText.join(', ') : 'brak'}
 
 Odpowiedz WYŁĄCZNIE w formacie JSON bez żadnego dodatkowego tekstu ani backticks:
-{"project":"...","tasks":"..."}`
+{"project":"...","tasks":"...","testnetLinks":"...","type":"..."}`
 
     const raw = await callAIJson(prompt)
     if (raw) {
       const clean  = raw.replace(/```json|```/g, '').trim()
       const parsed = JSON.parse(clean)
-      project = parsed.project || p.account || ''
-      tasks   = parsed.tasks   || ''
+      project      = parsed.project      || p.account || ''
+      tasks        = parsed.tasks        || ''
+      testnetLinks = parsed.testnetLinks || urlsInText.join('\n') || ''
+      if (parsed.type && AT_TYPES.includes(parsed.type)) {
+        // użyj typu sugerowanego przez AI jeśli jest na liście
+        entry_type = parsed.type
+      }
     }
   } catch(e) {
     console.warn('[addToProjects] AI error:', e)
+    // Fallback — wstaw linki z tekstu
+    testnetLinks = urlsInText.join('\n')
   }
 
   // Fallback jeśli AI nie odpowiedziało
   if (!project) project = p.account || 'Nowy projekt'
+  if (!testnetLinks) testnetLinks = urlsInText.join('\n')
 
   // Zapisz do Firebase
   const docId   = 'at_' + uid()
   const nextRow = Math.max(0, ...Object.values(airdropTasks).map(x => x.excelRow || 0)) + 1
   const entry   = {
     id: docId, excelRow: nextRow,
-    status: 'TODO', type: '',
+    status: 'TODO', type: entry_type || '',
     project, tasks,
-    date: '', socialLink, testnetLinks: '',
+    date: '', socialLink, testnetLinks,
     wallet: '', imgUrl: '', note: '',
     hidden: false, addedAt: nowStr()
   }
