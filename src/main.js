@@ -319,7 +319,7 @@ let tgSignals  = {}
 let tgWpisy    = {}
 let konta      = {}   // kategorie kont: { katId: { id, name, icon, note, accounts: [{id,name,note}] } }
 let airdropTasks = {}
-let aiTools      = {} // narzędzia AI: { docId: { id, name, desc, category, free, url, rating, tags, addedAt } } // projekty airdrop/testnet: { docId: { id, status, type, project, tasks, date, socialLink, testnetLinks, wallet, imgUrl, note, addedAt } }
+let aiTools      = {} // narzędzia AI: { docId: { id, name, desc, category, free, url, rating, tags, addedAt } }
 let manualDrafts = {} // szkice w "Dodaj ręcznie": { docId: { id, text, account, xLink, note, addedAt } }
 let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
 
@@ -2940,7 +2940,15 @@ async function deleteAiTool(docId) {
   toast('Usunięto ✓')
 }
 
-// ── ZDJĘCIE → TEKST (Gemini Vision) ──────────────────────────────
+// ── ZDJĘCIE → TEKST (Gemini Vision + Groq fallback) ──────────────
+const IMAGE_PROMPT = `Przepisz DOKŁADNIE cały tekst widoczny na tym zdjęciu/screenshocie.
+Zachowaj:
+- oryginalne formatowanie (nowe linie, akapity, odstępy)
+- wszystkie emoji, symbole, znaki specjalne
+- oryginalną kolejność elementów
+- wszystkie linki URL jeśli są widoczne
+NIE dodawaj żadnych komentarzy ani opisów od siebie. Przepisz tylko sam tekst.`
+
 async function extractTextFromImage(input) {
   const file = input.files?.[0]
   if (!file) return
@@ -2950,7 +2958,6 @@ async function extractTextFromImage(input) {
   if (btn)      btn.disabled = true
 
   try {
-    // Konwertuj do base64
     const base64 = await new Promise((res, rej) => {
       const reader = new FileReader()
       reader.onload  = () => res(reader.result.split(',')[1])
@@ -2958,40 +2965,62 @@ async function extractTextFromImage(input) {
       reader.readAsDataURL(file)
     })
     const mimeType = file.type || 'image/jpeg'
+    let text = ''
 
-    // Wyślij do Gemini Vision
-    const key = import.meta.env.VITE_GEMINI_API_KEY
-    if (!key) { toast('Brak klucza VITE_GEMINI_API_KEY!'); return }
+    // 1. Próbuj Gemini Vision
+    const geminiKey = import.meta.env.VITE_GEMINI_API_KEY
+    if (geminiKey) {
+      try {
+        if (statusEl) statusEl.textContent = '⏳ Gemini analizuje...'
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [
+                { text: IMAGE_PROMPT },
+                { inline_data: { mime_type: mimeType, data: base64 } }
+              ]}]
+            })
+          }
+        )
+        if (res.status === 429) throw new Error('RATE_LIMIT')
+        if (!res.ok) throw new Error('API_ERROR_' + res.status)
+        const data = await res.json()
+        text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+      } catch(e) {
+        if (e.message === 'RATE_LIMIT') {
+          console.warn('[Vision] Gemini rate limit — próbuję Groq...')
+        } else { throw e }
+      }
+    }
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
-      {
+    // 2. Fallback: Groq Vision
+    if (!text.trim()) {
+      const groqKey = import.meta.env.VITE_GROQ_API_KEY
+      if (!groqKey) throw new Error('Brak kluczy API (Gemini/Groq). Dodaj klucze w Vercel.')
+      if (statusEl) statusEl.textContent = '⏳ Groq analizuje...'
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
         body: JSON.stringify({
-          contents: [{
-            parts: [
-              {
-                text: `Przepisz DOKŁADNIE cały tekst widoczny na tym zdjęciu/screenshocie. 
-Zachowaj:
-- oryginalne formatowanie (nowe linie, akapity, odstępy)
-- wszystkie emoji, symbole, znaki specjalne
-- oryginalną kolejność elementów
-- wszystkie linki URL jeśli są widoczne
-NIE dodawaj żadnych komentarzy ani opisów od siebie. Przepisz tylko sam tekst.`
-              },
-              {
-                inline_data: { mime_type: mimeType, data: base64 }
-              }
+          model: 'llama-3.2-90b-vision-preview',
+          max_tokens: 2048,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: IMAGE_PROMPT },
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } }
             ]
           }]
         })
-      }
-    )
-
-    if (!res.ok) throw new Error('Błąd API: ' + res.status)
-    const data = await res.json()
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+      })
+      if (res.status === 429) throw new Error('Oba modele wyczerpały limity. Spróbuj za chwilę.')
+      if (!res.ok) throw new Error('Groq Vision error: ' + res.status)
+      const data = await res.json()
+      text = data.choices?.[0]?.message?.content || ''
+    }
 
     if (!text.trim()) { toast('Nie udało się odczytać tekstu ze zdjęcia'); return }
 
@@ -3008,11 +3037,11 @@ NIE dodawaj żadnych komentarzy ani opisów od siebie. Przepisz tylko sam tekst.
     toast('📸 Tekst ze zdjęcia zapisany jako szkic ✓')
   } catch(e) {
     console.error('[extractTextFromImage]', e)
-    if (statusEl) statusEl.textContent = '❌ Błąd: ' + e.message
-    toast('Błąd odczytu zdjęcia: ' + e.message)
+    if (statusEl) statusEl.textContent = '❌ ' + e.message
+    toast('Błąd: ' + e.message)
   } finally {
     if (btn) btn.disabled = false
-    input.value = '' // reset input
+    input.value = ''
   }
 }
 
@@ -3028,14 +3057,11 @@ function renderManualDrafts() {
   if (!el) return
   const list = Object.entries(manualDrafts)
     .sort(([,a],[,b]) => (b.addedAt||'').localeCompare(a.addedAt||''))
-
   updateManualDraftsBadge()
-
   if (!list.length) {
     el.innerHTML = '<div class="empty" style="margin-top:8px">Brak szkiców. Dodaj zdjęcie lub utwórz szkic ręcznie.</div>'
     return
   }
-
   el.innerHTML = list.map(([docId, d]) => {
     const editing = !!d._editing
     return `
@@ -3043,19 +3069,19 @@ function renderManualDrafts() {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
         <span style="font-size:11px;color:var(--text3)">📅 ${d.addedAt||''}</span>
         ${d.fromImage ? '<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:rgba(0,229,255,.1);color:var(--neon);border:1px solid rgba(0,229,255,.2)">📸 Ze zdjęcia</span>' : ''}
-        <div style="display:flex;gap:4px;margin-left:auto">
+        <div style="display:flex;gap:4px;margin-left:auto;flex-wrap:wrap">
           ${editing
             ? `<button class="btn btn-primary" style="font-size:11px;padding:3px 8px" onclick="saveDraftEdit('${docId}')">💾 Zapisz</button>
                <button class="btn" style="font-size:11px;padding:3px 8px" onclick="cancelDraftEdit('${docId}')">Anuluj</button>`
             : `<button class="btn" style="font-size:11px;padding:3px 8px" onclick="startDraftEdit('${docId}')">✏️ Edytuj</button>`
           }
-          <button class="btn btn-success" style="font-size:11px;padding:3px 8px" onclick="sendDraftToWpisy('${docId}')">✉ Wyślij do Wpisów</button>
+          <button class="btn btn-success" style="font-size:11px;padding:3px 8px;white-space:nowrap" onclick="sendDraftToWpisy('${docId}')">✉ Wyślij do Wpisów</button>
           <button class="btn btn-danger" style="font-size:11px;padding:3px 8px" onclick="deleteDraft('${docId}')">✕</button>
         </div>
       </div>
       ${editing ? `
         <div style="display:flex;flex-direction:column;gap:8px">
-          <textarea class="form-textarea" id="draft-text-${docId}" style="min-height:100px">${d.text||''}</textarea>
+          <textarea class="form-textarea" id="draft-text-${docId}" style="min-height:100px;white-space:pre-wrap">${d.text||''}</textarea>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <input class="form-input" id="draft-account-${docId}" placeholder="Konto / źródło (bez @)" value="${d.account||''}">
             <input class="form-input" id="draft-link-${docId}" placeholder="Link (opcjonalnie)" value="${d.xLink||''}">
@@ -3101,7 +3127,6 @@ async function sendDraftToWpisy(docId) {
   }
   await setDoc(doc(db, 'posts', id), post)
   posts[id] = post
-  // Usuń szkic
   await deleteDoc(doc(db, 'manualDrafts', docId))
   delete manualDrafts[docId]
   renderManualDrafts()
@@ -3121,7 +3146,7 @@ function toggleDraftPreview(docId) {
   const el  = document.getElementById(`draft-preview-${docId}`)
   const btn = el?.nextElementSibling
   if (!el) return
-  const collapsed = el.style.maxHeight === '120px' || !el.style.maxHeight
+  const collapsed = el.style.maxHeight !== 'none'
   el.style.maxHeight = collapsed ? 'none' : '120px'
   if (btn) btn.innerHTML = collapsed
     ? '<span class="at-expand-icon">▲</span> mniej'
@@ -3263,20 +3288,18 @@ function buildApp() {
     <div id="page-manual" class="page">
       <div class="section-header">
         <span style="font-size:13px;color:var(--text2)">Dodaj post ręcznie — pojawi się w zakładce Wpisy</span>
-        <button class="btn-add" id="btn-add-manual" onclick="toggleManualForm()">+ Dodaj post ręcznie</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <label class="btn btn-primary" style="cursor:pointer;position:relative;white-space:nowrap" id="btn-img-extract">
+            📸 Dodaj ze zdjęcia
+            <input type="file" accept="image/*" capture="environment" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="extractTextFromImage(this)">
+          </label>
+          <span id="img-extract-status" style="font-size:12px;color:var(--neon)"></span>
+          <button class="btn-add" id="btn-add-manual" onclick="toggleManualForm()">+ Dodaj ręcznie</button>
+        </div>
       </div>
       <div id="manual-form" style="display:none">
         <div class="form-card">
           <div class="form-title">Nowy post ręczny</div>
-          <!-- Przycisk: wyciągnij tekst ze zdjęcia -->
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:10px 12px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.15);border-radius:var(--r);flex-wrap:wrap">
-            <span style="font-size:12px;color:var(--text3);flex:1">📸 Masz screenshot? Wyciągnij tekst ze zdjęcia automatycznie</span>
-            <label class="btn btn-primary" style="cursor:pointer;position:relative;white-space:nowrap" id="btn-img-extract">
-              📸 Dodaj zdjęcie
-              <input type="file" accept="image/*" capture="environment" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="extractTextFromImage(this)">
-            </label>
-            <span id="img-extract-status" style="font-size:12px;color:var(--neon)"></span>
-          </div>
           <div class="form-row full">
             <div>
               <div class="form-label">Treść posta *</div>
@@ -3309,13 +3332,11 @@ function buildApp() {
           </div>
         </div>
       </div>
-
-      <!-- Szkice -->
       <div style="margin-top:20px">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
           <span style="font-size:14px;font-weight:700;color:var(--text)">Szkice</span>
           <span id="manual-drafts-badge" style="display:none;font-size:11px;padding:1px 7px;border-radius:8px;background:rgba(0,229,255,.12);color:var(--neon);border:1px solid rgba(0,229,255,.25);font-weight:700">0</span>
-          <span style="font-size:12px;color:var(--text3)">— wpisy ze zdjęć i szkice ręczne czekające na wysłanie</span>
+          <span style="font-size:12px;color:var(--text3)">— wpisy ze zdjęć czekające na wysłanie do Wpisów</span>
         </div>
         <div id="manual-drafts-list"></div>
       </div>
@@ -3913,7 +3934,7 @@ Object.assign(window, {
   triggerAIPara,
   renderArchProjekty, restoreArchP, deleteArchP, restoreAllArchP, deleteAllArchP,
   toggleManualForm, addManualPost, extractTextFromImage,
-  renderManualDrafts, startDraftEdit, cancelDraftEdit, saveDraftEdit, sendDraftToWpisy, deleteDraft, toggleDraftPreview,
+  renderManualDrafts, updateManualDraftsBadge, startDraftEdit, cancelDraftEdit, saveDraftEdit, sendDraftToWpisy, deleteDraft, toggleDraftPreview,
   renderAiTools, toggleAitForm, openAitEdit, saveAiTool, deleteAiTool,
   renderStats,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
