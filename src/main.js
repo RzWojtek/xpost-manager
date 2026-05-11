@@ -210,6 +210,124 @@ function getBestAvailableModel() {
   return AI_MODELS.find(m => isModelAvailable(m)) || null
 }
 
+function parseGroqHeaders(headers) {
+  const parseReset = v => {
+    if (!v) return null
+    // format: "1.2s", "120ms", "2m30s", "2m30.5s"
+    let ms = 0
+    const minMatch = v.match(/(\d+)m/)
+    const secMatch = v.match(/(\d+(?:\.\d+)?)s/)
+    const msMatch  = v.match(/(\d+(?:\.\d+)?)ms/)
+    if (minMatch) ms += parseInt(minMatch[1]) * 60000
+    if (secMatch && !msMatch) ms += parseFloat(secMatch[1]) * 1000
+    if (msMatch) ms += parseFloat(msMatch[1])
+    return ms > 0 ? Date.now() + ms : null
+  }
+  const s = apiStatus.groq
+  const rr = headers.get('x-ratelimit-remaining-requests')
+  const lr = headers.get('x-ratelimit-limit-requests')
+  const rt = headers.get('x-ratelimit-remaining-tokens')
+  const lt = headers.get('x-ratelimit-limit-tokens')
+  const rsr = headers.get('x-ratelimit-reset-requests')
+  const rst = headers.get('x-ratelimit-reset-tokens')
+  if (rr !== null) s.remainingReq  = parseInt(rr)
+  if (lr !== null) s.limitReq      = parseInt(lr)
+  if (rt !== null) s.remainingTok  = parseInt(rt)
+  if (lt !== null) s.limitTok      = parseInt(lt)
+  if (rsr)         s.resetReqMs    = parseReset(rsr)
+  if (rst)         s.resetTokMs    = parseReset(rst)
+  s.updatedAt = Date.now()
+  // Odśwież sekcję statusu jeśli jest widoczna
+  const el = document.getElementById('api-status-groq')
+  if (el) renderGroqStatusCard()
+}
+
+async function checkGroqStatus() {
+  const key = import.meta.env.VITE_GROQ_API_KEY
+  if (!key) { toast('Brak VITE_GROQ_API_KEY'); return }
+  const btn = document.getElementById('btn-check-groq')
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Sprawdzam...' }
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: 'Hi' }],
+        max_tokens: 1
+      })
+    })
+    parseGroqHeaders(res.headers)
+    renderGroqStatusCard()
+    toast('✓ Status Groq zaktualizowany')
+  } catch(e) {
+    toast('Błąd: ' + e.message)
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sprawdź teraz' }
+  }
+}
+
+function renderGroqStatusCard() {
+  const el = document.getElementById('api-status-groq')
+  if (!el) return
+  const s = apiStatus.groq
+  if (s.remainingReq === null) {
+    el.innerHTML = `<div style="font-size:12px;color:var(--text3)">Brak danych — wygeneruj parafrazę lub kliknij "Sprawdź teraz"</div>`
+    return
+  }
+
+  const pctReq = s.limitReq > 0 ? Math.round(s.remainingReq / s.limitReq * 100) : 0
+  const pctTok = s.limitTok > 0 ? Math.round(s.remainingTok / s.limitTok * 100) : 0
+  const barColor = pct => pct > 50 ? '#10b981' : pct > 20 ? '#f59e0b' : '#ef4444'
+
+  const resetStr = ts => {
+    if (!ts) return '—'
+    const diff = ts - Date.now()
+    if (diff <= 0) return 'Już dostępne'
+    const s = Math.ceil(diff / 1000)
+    if (s < 60) return `${s}s`
+    const m = Math.floor(s / 60), sec = s % 60
+    return `${m}m ${sec}s`
+  }
+
+  const updated = s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString('pl-PL') : '—'
+
+  el.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <!-- Requests -->
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+          <span style="color:var(--text2);font-weight:600">Zapytania (RPM/RPD)</span>
+          <span style="color:var(--text)">${s.remainingReq} / ${s.limitReq ?? '?'} pozostało</span>
+        </div>
+        <div style="height:8px;border-radius:4px;background:var(--bg3)">
+          <div style="height:8px;border-radius:4px;background:${barColor(pctReq)};width:${pctReq}%;transition:width .4s"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Reset za: ${resetStr(s.resetReqMs)}</div>
+      </div>
+      <!-- Tokens -->
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+          <span style="color:var(--text2);font-weight:600">Tokeny (TPM)</span>
+          <span style="color:var(--text)">${s.remainingTok?.toLocaleString()} / ${s.limitTok?.toLocaleString() ?? '?'} pozostało</span>
+        </div>
+        <div style="height:8px;border-radius:4px;background:var(--bg3)">
+          <div style="height:8px;border-radius:4px;background:${barColor(pctTok)};width:${pctTok}%;transition:width .4s"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Reset za: ${resetStr(s.resetTokMs)}</div>
+      </div>
+      <div style="font-size:10px;color:var(--text3)">Ostatnia aktualizacja: ${updated}</div>
+    </div>`
+
+  // Odśwież countdown co sekundę
+  if (!el._countdownInterval) {
+    el._countdownInterval = setInterval(() => {
+      if (document.getElementById('api-status-groq')) renderGroqStatusCard()
+      else clearInterval(el._countdownInterval)
+    }, 1000)
+  }
+}
+
 async function callModelApi(model, text) {
   const key = import.meta.env[model.envKey]
   const fullPrompt = PARA_PROMPT + '\n\n' + text
@@ -245,6 +363,10 @@ async function callModelApi(model, text) {
       temperature: 0.7
     })
   })
+  // Przechwytuj nagłówki rate limit dla Groq
+  if (model.id.startsWith('groq')) {
+    parseGroqHeaders(res.headers)
+  }
   if (res.status === 429 || res.status === 503) throw new Error('RATE_LIMIT')
   if (!res.ok) throw new Error('API_ERROR_' + res.status)
   const data = await res.json()
@@ -321,6 +443,11 @@ let konta      = {}   // kategorie kont: { katId: { id, name, icon, note, accoun
 let airdropTasks = {}
 let aiTools      = {} // narzędzia AI: { docId: { id, name, desc, category, free, url, rating, tags, addedAt } }
 let manualDrafts = {} // szkice w "Dodaj ręcznie": { docId: { id, text, account, xLink, note, addedAt } }
+
+// Stan limitów API — aktualizowany przy każdym wywołaniu
+const apiStatus = {
+  groq: { remainingReq: null, limitReq: null, remainingTok: null, limitTok: null, resetReqMs: null, resetTokMs: null, updatedAt: null },
+}
 let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
 
 // Filter state — zarządzane lokalnie
@@ -2471,6 +2598,42 @@ function renderAtSettings() {
         <button class="btn btn-primary" style="margin-top:10px;width:100%" onclick="saveAtTypes()">💾 Zapisz typy</button>
       </div>
 
+      <!-- STATUS API -->
+      <div class="form-card">
+        <div class="form-title">📡 Status API — limity modeli AI</div>
+
+        <!-- GROQ -->
+        <div style="margin-bottom:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+            <div>
+              <span style="font-size:13px;font-weight:700;color:var(--text)">Groq</span>
+              <span style="font-size:11px;color:var(--text3);margin-left:8px">llama-3.3-70b-versatile (parafraza)</span>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button class="btn" id="btn-check-groq" onclick="checkGroqStatus()" style="font-size:11px;padding:3px 10px">🔄 Sprawdź teraz</button>
+              <a href="https://console.groq.com/usage" target="_blank" class="btn" style="font-size:11px;padding:3px 10px">📊 Konsola ↗</a>
+            </div>
+          </div>
+          <div id="api-status-groq" style="background:var(--bg3);padding:10px 12px;border-radius:var(--r);border:1px solid var(--border)">
+            <div style="font-size:12px;color:var(--text3)">Brak danych — wygeneruj parafrazę lub kliknij "Sprawdź teraz"</div>
+          </div>
+          <div style="font-size:11px;color:var(--text3);margin-top:4px">
+            ⚠️ Groq free tier: 30 zapytań/min, 6 000 tokenów/min, 1 000 zapytań/dzień (reset o północy UTC)
+          </div>
+        </div>
+
+        <!-- Pozostałe — tylko linki -->
+        <div style="border-top:1px solid var(--border);padding-top:12px">
+          <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:8px">Pozostałe providery — sprawdź w konsoli:</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" class="btn" style="font-size:11px;padding:4px 12px">🟦 Gemini — AI Studio ↗</a>
+            <a href="https://cloud.cerebras.ai/platform" target="_blank" class="btn" style="font-size:11px;padding:4px 12px">🟧 Cerebras ↗</a>
+            <a href="https://cloud.sambanova.ai/" target="_blank" class="btn" style="font-size:11px;padding:4px 12px">🟩 SambaNova ↗</a>
+            <a href="https://openrouter.ai/activity" target="_blank" class="btn" style="font-size:11px;padding:4px 12px">🟪 OpenRouter ↗</a>
+          </div>
+        </div>
+      </div>
+
       <!-- COOKIES / SESJA -->
       <div class="form-card">
         <div class="form-title">🍪 Cookies i sesja</div>
@@ -3940,6 +4103,7 @@ Object.assign(window, {
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
   exportAtCsv, duplicateAt, atSetSort,
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
+  checkGroqStatus, renderGroqStatusCard,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
 })
 
