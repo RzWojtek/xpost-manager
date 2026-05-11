@@ -210,123 +210,224 @@ function getBestAvailableModel() {
   return AI_MODELS.find(m => isModelAvailable(m)) || null
 }
 
-function parseGroqHeaders(headers) {
-  const parseReset = v => {
-    if (!v) return null
-    // format: "1.2s", "120ms", "2m30s", "2m30.5s"
-    let ms = 0
-    const minMatch = v.match(/(\d+)m/)
-    const secMatch = v.match(/(\d+(?:\.\d+)?)s/)
-    const msMatch  = v.match(/(\d+(?:\.\d+)?)ms/)
-    if (minMatch) ms += parseInt(minMatch[1]) * 60000
-    if (secMatch && !msMatch) ms += parseFloat(secMatch[1]) * 1000
-    if (msMatch) ms += parseFloat(msMatch[1])
-    return ms > 0 ? Date.now() + ms : null
+// ── GROQ USAGE COUNTER (localStorage) ───────────────────────────
+// Limity Groq free tier:
+const GROQ_LIMITS = {
+  rpm: 30,        // zapytania / minutę
+  tpm: 6000,      // tokeny / minutę
+  rpd: 1000,      // zapytania / dzień (reset o północy UTC)
+}
+
+function _groqStorageKey() { return 'groqUsage_v1' }
+
+function _loadGroqUsage() {
+  try {
+    const raw = localStorage.getItem(_groqStorageKey())
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function _saveGroqUsage(data) {
+  try { localStorage.setItem(_groqStorageKey(), JSON.stringify(data)) } catch {}
+}
+
+function _initGroqUsage() {
+  const now   = Date.now()
+  const dayMs = _msToMidnightUTC()
+  return {
+    // Okno minutowe — tablica timestampów ostatnich zapytań
+    minuteReqs: [],
+    // Dzienne — licznik i data resetu
+    dayCount:   0,
+    dayResetAt: now + dayMs,
+    // Tokeny w ostatniej minucie — tablica {ts, tokens}
+    minuteToks: [],
+    // Ostatnie 429
+    last429At:  null,
+    retry429At: null,
   }
-  const s = apiStatus.groq
-  const rr = headers.get('x-ratelimit-remaining-requests')
-  const lr = headers.get('x-ratelimit-limit-requests')
-  const rt = headers.get('x-ratelimit-remaining-tokens')
-  const lt = headers.get('x-ratelimit-limit-tokens')
-  const rsr = headers.get('x-ratelimit-reset-requests')
-  const rst = headers.get('x-ratelimit-reset-tokens')
-  if (rr !== null) s.remainingReq  = parseInt(rr)
-  if (lr !== null) s.limitReq      = parseInt(lr)
-  if (rt !== null) s.remainingTok  = parseInt(rt)
-  if (lt !== null) s.limitTok      = parseInt(lt)
-  if (rsr)         s.resetReqMs    = parseReset(rsr)
-  if (rst)         s.resetTokMs    = parseReset(rst)
-  s.updatedAt = Date.now()
-  // Odśwież sekcję statusu jeśli jest widoczna
+}
+
+function _msToMidnightUTC() {
+  const now = new Date()
+  const midnight = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1
+  ))
+  return midnight - now
+}
+
+function trackGroqCall(tokensUsed) {
+  let d = _loadGroqUsage() || _initGroqUsage()
+  const now = Date.now()
+
+  // Reset dzienny jeśli minął czas
+  if (now >= d.dayResetAt) {
+    d.dayCount  = 0
+    d.dayResetAt = now + _msToMidnightUTC()
+  }
+
+  // Oczyść stare wpisy z okna 60s
+  d.minuteReqs = (d.minuteReqs || []).filter(ts => now - ts < 60000)
+  d.minuteToks = (d.minuteToks || []).filter(e => now - e.ts < 60000)
+
+  // Dodaj nowe
+  d.minuteReqs.push(now)
+  d.minuteToks.push({ ts: now, tokens: tokensUsed || 0 })
+  d.dayCount = (d.dayCount || 0) + 1
+
+  _saveGroqUsage(d)
+
+  // Odśwież UI jeśli widoczne
   const el = document.getElementById('api-status-groq')
   if (el) renderGroqStatusCard()
 }
 
-async function checkGroqStatus() {
-  const key = import.meta.env.VITE_GROQ_API_KEY
-  if (!key) { toast('Brak VITE_GROQ_API_KEY'); return }
-  const btn = document.getElementById('btn-check-groq')
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Sprawdzam...' }
-  try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 1
-      })
-    })
-    parseGroqHeaders(res.headers)
-    renderGroqStatusCard()
-    toast('✓ Status Groq zaktualizowany')
-  } catch(e) {
-    toast('Błąd: ' + e.message)
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sprawdź teraz' }
-  }
+function trackGroq429(retryAfterSec) {
+  let d = _loadGroqUsage() || _initGroqUsage()
+  const now = Date.now()
+  d.last429At  = now
+  d.retry429At = now + (retryAfterSec ? retryAfterSec * 1000 : 62000)
+  _saveGroqUsage(d)
+  const el = document.getElementById('api-status-groq')
+  if (el) renderGroqStatusCard()
 }
 
 function renderGroqStatusCard() {
   const el = document.getElementById('api-status-groq')
   if (!el) return
-  const s = apiStatus.groq
-  if (s.remainingReq === null) {
-    el.innerHTML = `<div style="font-size:12px;color:var(--text3)">Brak danych — wygeneruj parafrazę lub kliknij "Sprawdź teraz"</div>`
+
+  const d   = _loadGroqUsage()
+  const now = Date.now()
+
+  if (!d) {
+    el.innerHTML = `<div style="font-size:12px;color:var(--text3)">Brak danych — wykonaj parafrazę lub kliknij "Odśwież"</div>`
     return
   }
 
-  const pctReq = s.limitReq > 0 ? Math.round(s.remainingReq / s.limitReq * 100) : 0
-  const pctTok = s.limitTok > 0 ? Math.round(s.remainingTok / s.limitTok * 100) : 0
+  // Oczyść stare okna
+  const minuteReqs = (d.minuteReqs || []).filter(ts => now - ts < 60000)
+  const minuteToks = (d.minuteToks || []).filter(e  => now - e.ts < 60000)
+  const tokThisMin = minuteToks.reduce((s, e) => s + e.tokens, 0)
+
+  const dayReset   = d.dayResetAt > now ? d.dayResetAt : now + _msToMidnightUTC()
+  const dayCount   = now >= (d.dayResetAt||0) ? 0 : (d.dayCount || 0)
+
+  // Limity
+  const rpmUsed = minuteReqs.length
+  const rpmLeft = Math.max(0, GROQ_LIMITS.rpm - rpmUsed)
+  const tpmLeft = Math.max(0, GROQ_LIMITS.tpm - tokThisMin)
+  const rpdLeft = Math.max(0, GROQ_LIMITS.rpd - dayCount)
+
+  const pctRpm = Math.round(rpmLeft / GROQ_LIMITS.rpm * 100)
+  const pctTpm = Math.round(tpmLeft / GROQ_LIMITS.tpm * 100)
+  const pctRpd = Math.round(rpdLeft / GROQ_LIMITS.rpd * 100)
+
   const barColor = pct => pct > 50 ? '#10b981' : pct > 20 ? '#f59e0b' : '#ef4444'
 
-  const resetStr = ts => {
-    if (!ts) return '—'
-    const diff = ts - Date.now()
-    if (diff <= 0) return 'Już dostępne'
-    const s = Math.ceil(diff / 1000)
+  const countdownStr = ms => {
+    if (ms <= 0) return 'Już dostępne'
+    const s = Math.ceil(ms / 1000)
     if (s < 60) return `${s}s`
     const m = Math.floor(s / 60), sec = s % 60
-    return `${m}m ${sec}s`
+    if (m < 60) return `${m}m ${sec}s`
+    const h = Math.floor(m / 60), min = m % 60
+    return `${h}h ${min}m`
   }
 
-  const updated = s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString('pl-PL') : '—'
+  // Ile sekund do resetu minutowego (od najstarszego zapytania w oknie)
+  const oldestReq  = minuteReqs[0] || now
+  const rpmResetMs = Math.max(0, 60000 - (now - oldestReq))
+  const dayResetMs = Math.max(0, dayReset - now)
+
+  // Alert 429
+  const is429     = d.retry429At && now < d.retry429At
+  const retry429Ms = is429 ? d.retry429At - now : 0
 
   el.innerHTML = `
     <div style="display:flex;flex-direction:column;gap:10px">
-      <!-- Requests -->
+      ${is429 ? `
+      <div style="padding:8px 12px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:var(--r);display:flex;align-items:center;gap:8px">
+        <span style="font-size:16px">🚫</span>
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#ef4444">Rate limit wyczerpany (429)</div>
+          <div style="font-size:11px;color:var(--text3)">Dostępne za: <strong style="color:#f59e0b">${countdownStr(retry429Ms)}</strong></div>
+        </div>
+      </div>` : ''}
+
+      <!-- RPM -->
       <div>
         <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
-          <span style="color:var(--text2);font-weight:600">Zapytania (RPM/RPD)</span>
-          <span style="color:var(--text)">${s.remainingReq} / ${s.limitReq ?? '?'} pozostało</span>
+          <span style="color:var(--text2);font-weight:600">Zapytania / minuta (RPM)</span>
+          <span style="color:var(--text)">${rpmLeft} / ${GROQ_LIMITS.rpm} wolnych</span>
         </div>
         <div style="height:8px;border-radius:4px;background:var(--bg3)">
-          <div style="height:8px;border-radius:4px;background:${barColor(pctReq)};width:${pctReq}%;transition:width .4s"></div>
+          <div style="height:8px;border-radius:4px;background:${barColor(pctRpm)};width:${pctRpm}%;transition:width .3s"></div>
         </div>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">Reset za: ${resetStr(s.resetReqMs)}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">
+          Użyte: ${rpmUsed} · Reset za: ${rpmUsed > 0 ? countdownStr(rpmResetMs) : '—'}
+        </div>
       </div>
-      <!-- Tokens -->
+
+      <!-- TPM -->
       <div>
         <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
-          <span style="color:var(--text2);font-weight:600">Tokeny (TPM)</span>
-          <span style="color:var(--text)">${s.remainingTok?.toLocaleString()} / ${s.limitTok?.toLocaleString() ?? '?'} pozostało</span>
+          <span style="color:var(--text2);font-weight:600">Tokeny / minuta (TPM)</span>
+          <span style="color:var(--text)">${tpmLeft.toLocaleString()} / ${GROQ_LIMITS.tpm.toLocaleString()} wolnych</span>
         </div>
         <div style="height:8px;border-radius:4px;background:var(--bg3)">
-          <div style="height:8px;border-radius:4px;background:${barColor(pctTok)};width:${pctTok}%;transition:width .4s"></div>
+          <div style="height:8px;border-radius:4px;background:${barColor(pctTpm)};width:${pctTpm}%;transition:width .3s"></div>
         </div>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">Reset za: ${resetStr(s.resetTokMs)}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">
+          Użyte: ${tokThisMin.toLocaleString()} · Reset za: ${tokThisMin > 0 ? countdownStr(rpmResetMs) : '—'}
+        </div>
       </div>
-      <div style="font-size:10px;color:var(--text3)">Ostatnia aktualizacja: ${updated}</div>
+
+      <!-- RPD -->
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+          <span style="color:var(--text2);font-weight:600">Zapytania / dzień (RPD)</span>
+          <span style="color:var(--text)">${rpdLeft} / ${GROQ_LIMITS.rpd} wolnych</span>
+        </div>
+        <div style="height:8px;border-radius:4px;background:var(--bg3)">
+          <div style="height:8px;border-radius:4px;background:${barColor(pctRpd)};width:${pctRpd}%;transition:width .3s"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">
+          Użyte dziś: ${dayCount} · Reset za: ${countdownStr(dayResetMs)} (północ UTC)
+        </div>
+      </div>
+
+      <div style="font-size:10px;color:var(--text3);border-top:1px solid var(--border);padding-top:6px">
+        ℹ️ Licznik lokalny — zlicza wywołania z tej przeglądarki. Groq nie udostępnia limitów przez API dla aplikacji webowych.
+        <button onclick="resetGroqCounter()" style="background:none;border:none;color:var(--neon);font-size:10px;cursor:pointer;padding:0;margin-left:6px;font-family:inherit">Resetuj licznik</button>
+      </div>
     </div>`
 
-  // Odśwież countdown co sekundę
-  if (!el._countdownInterval) {
-    el._countdownInterval = setInterval(() => {
+  // Odśwież co sekundę
+  if (!el._groqTimer) {
+    el._groqTimer = setInterval(() => {
       if (document.getElementById('api-status-groq')) renderGroqStatusCard()
-      else clearInterval(el._countdownInterval)
+      else { clearInterval(el._groqTimer); el._groqTimer = null }
     }, 1000)
   }
 }
+
+function resetGroqCounter() {
+  localStorage.removeItem(_groqStorageKey())
+  renderGroqStatusCard()
+  toast('Licznik Groq zresetowany ✓')
+}
+
+async function checkGroqStatus() {
+  // Tylko odśwież widok — dane są z localStorage
+  renderGroqStatusCard()
+  const btn = document.getElementById('btn-check-groq')
+  if (btn) {
+    btn.textContent = '✓ Odświeżono'
+    setTimeout(() => { if (btn) btn.textContent = '🔄 Odśwież' }, 1500)
+  }
+}
+
+function parseGroqHeaders() {} // zachowane dla kompatybilności, CORS blokuje nagłówki
 
 async function callModelApi(model, text) {
   const key = import.meta.env[model.envKey]
@@ -363,13 +464,18 @@ async function callModelApi(model, text) {
       temperature: 0.7
     })
   })
-  // Przechwytuj nagłówki rate limit dla Groq
-  if (model.id.startsWith('groq')) {
-    parseGroqHeaders(res.headers)
+  if (res.status === 429 || res.status === 503) {
+    // Zapisz info o 429 do licznika
+    if (model.id.startsWith('groq')) trackGroq429(62)
+    throw new Error('RATE_LIMIT')
   }
-  if (res.status === 429 || res.status === 503) throw new Error('RATE_LIMIT')
   if (!res.ok) throw new Error('API_ERROR_' + res.status)
   const data = await res.json()
+  // Zlicz tokeny dla Groq
+  if (model.id.startsWith('groq')) {
+    const usedToks = (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0)
+    trackGroqCall(usedToks)
+  }
   return data.choices?.[0]?.message?.content || ''
 }
 
@@ -444,10 +550,6 @@ let airdropTasks = {}
 let aiTools      = {} // narzędzia AI: { docId: { id, name, desc, category, free, url, rating, tags, addedAt } }
 let manualDrafts = {} // szkice w "Dodaj ręcznie": { docId: { id, text, account, xLink, note, addedAt } }
 
-// Stan limitów API — aktualizowany przy każdym wywołaniu
-const apiStatus = {
-  groq: { remainingReq: null, limitReq: null, remainingTok: null, limitTok: null, resetReqMs: null, resetTokMs: null, updatedAt: null },
-}
 let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
 
 // Filter state — zarządzane lokalnie
@@ -2610,7 +2712,7 @@ function renderAtSettings() {
               <span style="font-size:11px;color:var(--text3);margin-left:8px">llama-3.3-70b-versatile (parafraza)</span>
             </div>
             <div style="display:flex;gap:6px;align-items:center">
-              <button class="btn" id="btn-check-groq" onclick="checkGroqStatus()" style="font-size:11px;padding:3px 10px">🔄 Sprawdź teraz</button>
+              <button class="btn" id="btn-check-groq" onclick="checkGroqStatus()" style="font-size:11px;padding:3px 10px">🔄 Odśwież</button>
               <a href="https://console.groq.com/usage" target="_blank" class="btn" style="font-size:11px;padding:3px 10px">📊 Konsola ↗</a>
             </div>
           </div>
@@ -3179,9 +3281,11 @@ async function extractTextFromImage(input) {
           }]
         })
       })
-      if (res.status === 429) throw new Error('Oba modele wyczerpały limity. Spróbuj za chwilę.')
+      if (res.status === 429) { trackGroq429(62); throw new Error('Oba modele wyczerpały limity. Spróbuj za chwilę.') }
       if (!res.ok) throw new Error('Groq Vision error: ' + res.status)
       const data = await res.json()
+      const visionToks = (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0)
+      trackGroqCall(visionToks)
       text = data.choices?.[0]?.message?.content || ''
     }
 
@@ -4103,7 +4207,7 @@ Object.assign(window, {
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
   exportAtCsv, duplicateAt, atSetSort,
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
-  checkGroqStatus, renderGroqStatusCard,
+  checkGroqStatus, renderGroqStatusCard, resetGroqCounter,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
 })
 
