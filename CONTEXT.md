@@ -548,13 +548,141 @@ Nowe klasy: `.at-table-outer`, `.at-page-inner`, `.at-table`, `.at-table thead`,
 
 ---
 
+### Sesja — XPost Manager, podsumowanie zmian
+1. Zakładka 🪂 Projekty (airdropTasks) — rozbudowa
+Widok i UX:
+
+Dodano widok tabela + karty (przełącznik ☰/▦)
+Tabela z table-layout:fixed, szerokość 1460px, wykracza poza max-width:1140px przez margin:0 -1rem na #page-airdrop
+Sticky nagłówki kolumn (thead position:sticky) przez overflow:auto na .at-table-outer z max-height:72vh
+Scrollbar poziomy zawsze widoczny
+Wszystkie kolumny zwijalne — limit znaków: projekt=30, zadania=80, data=20, socialLink=32, testnetLinks=2 linki, portfel=20, notatka=80
+Przycisk rozwinięcia: cyjanowa pigułka ▼ więcej / ▲ mniej
+Kolumna # z numerem wiersza z Excela
+
+Funkcje:
+
+Import .xlsx (SheetJS CDN, lazy-load) — pobiera dane z pierwszego arkusza, zachowuje numery wierszy (excelRow)
+Eksport do CSV (UTF-8 z BOM, działa w Excelu z polskimi znakami)
+Duplikowanie projektu (przycisk ⧉, nowy numer max+1, status TODO)
+Sortowanie po klikniętym nagłówku (↕/↑/↓) — kolumny: #, Status, Typ, Projekt, Data
+Domyślne sortowanie malejąco po excelRow
+Nowe wpisy ręczne dostają max(excelRow)+1 automatycznie
+Zaznaczanie checkboxami + masowe usuwanie i masowe ukrywanie
+Bulk bar z licznikiem i przyciskami
+Ukrywanie wpisów (🙈) — pole hidden:true w Firebase, nie kasuje
+Przycisk 👁 "Pokaż ukryte" — toggle atShowHidden
+Naprawa licznika TODO/DONE — toUpperCase() dla case-insensitive
+
+Archiwum projektów:
+
+Nowa podzakładka 📦 Archiwum projektów w "Więcej"
+Statystyki ukrytych (łącznie, typy, statusy)
+Lista ukrytych z przyciskami "👁 Przywróć" i "🗑 Usuń na stałe"
+Masowe: "Przywróć wszystkie" i "Usuń wszystkie na stałe"
+
+
+2. Zakładka Wpisy — zmiany
+Zasada: zero zmian w logice, filtrach, parafrazie, PARA_PROMPT.
+
+Checkbox przy każdej karcie + bulk bar "Odrzuć zaznaczone" (ustawia status:'Odrzucone' zamiast kasować — wpis nie wraca po ponownym pobraniu)
+Badge z liczbą nowych wpisów przy @konto (gdy >1)
+@konto klikalne — otwiera modal podglądu profilu z: statystykami konta (Nowe/Do zrobienia/W toku/Opublikowane), listą 15 ostatnich wpisów, linkiem do X. Zamknięcie przez ✕, tło lub Escape
+Przycisk 🪂 Dodaj do Projektów w card-foot — AI analizuje tweet (Groq/rotacja), wyciąga: nazwę projektu, zadania, linki testnet (regex + AI), typ. Zapisuje do airdropTasks
+
+
+3. Zakładka 📊 Statystyki
+Nowa zakładka między "🪂 Projekty" a "Więcej":
+
+Liczniki wpisów: aktywne / nowe / opublikowane / odrzucone
+Liczniki projektów: wszystkie / TODO / DONE / pominięte / ukryte
+Wykres słupkowy aktywności z ostatnich 14 dni
+Top 10 kont wg liczby aktywnych wpisów z paskami
+Rozkład statusów projektów z kolorowymi paskami
+Rozkład typów projektów
+
+
+4. Zakładka 🤖 AI (aiTools)
+Nowa zakładka, dane w Firestore (aiTools), widoczna na wszystkich urządzeniach:
+
+Pola: nazwa, kategoria, opis, URL, tagi (przecinki), darmowe (checkbox), ocena 1-5
+Karty z badge'ami kategorii, darmowe/płatne, gwiazdki
+Filtry: szukaj tekstem, kategoria, darmowe/płatne
+Pełny CRUD: dodaj, edytuj, usuń
+Kategorie: Tekst, Obraz, Wideo, Audio, Kod, Analiza, Crypto/Web3, Inne
+
+
+5. Zakładka ✍ Dodaj ręcznie — przebudowa
+Szkice (manualDrafts):
+
+Nowa kolekcja Firebase manualDrafts — szkice czekające na wysłanie
+Lista szkiców pod formularzem z badge licznikiem
+Każdy szkic: edycja (treść, konto, link, notatka), "✉ Wyślij do Wpisów", usuń
+"Wyślij do Wpisów" → tworzy wpis w posts z manualEntry:true, status Nowy, usuwa szkic
+Tekst zwijany do 120px z "▼ więcej"
+
+Zdjęcie → Tekst:
+
+Przycisk 📸 Dodaj ze zdjęcia zawsze widoczny w nagłówku zakładki
+Zdjęcie → base64 w pamięci → Gemini Vision API
+Fallback przy 429: Gemini → Groq Vision (meta-llama/llama-4-scout-17b-16e-instruct)
+Prompt zachowuje oryginalne formatowanie, emoji, linki, nowe linie
+Wynik zapisuje się jako szkic w manualDrafts (nie do formularza)
+5 zdjęć = 5 osobnych szkiców, synchronizowane między urządzeniami
+
+
+6. Zakładka Notatki
+
+Wyszukiwarka tekstowa (filtruje w czasie rzeczywistym)
+Przycisk 📋 Kopiuj przy każdej notatce (navigator.clipboard)
+Edycja notatki inline (przycisk ✏️ Edytuj → textarea → 💾 Zapisz)
+
+
+7. Ustawienia (podzakładka w Więcej)
+Statusy i typy projektów:
+
+Edytowalne listy statusów i typów (zapisywane w airdropConfig/settings)
+Dodawanie, edycja inline, usuwanie
+
+📡 Status API — limity Groq:
+
+Lokalny licznik w localStorage (CORS blokuje nagłówki — jedyne wiarygodne rozwiązanie)
+Trzy paski: RPM (30/min), TPM (6000/min), RPD (1000/dzień)
+Kolory: zielony >50%, żółty >20%, czerwony ≤20%
+Countdown do resetu minutowego i dziennego (północ UTC), odświeżany co sekundę
+Alert 429 z licznikiem "Dostępne za: Xs"
+Dane zbierane automatycznie przy każdej parafrazie i vision
+Przycisk "Resetuj licznik"
+Linki do konsol: Gemini AI Studio, Cerebras, SambaNova, OpenRouter
+
+🍪 Cookies i sesja:
+
+Info o sesji Firebase (email, ostatnie logowanie, auto-refresh tokenu)
+Lista cookies JS-accessible
+Info o lokalizacji cookies XParafBota na VPS
+
+
+8. Firebase — nowe kolekcje
+KolekcjaOpisairdropTasksProjekty airdrop/testnetairdropConfigUstawienia: statusy i typy projektówaiToolsNarzędzia AImanualDraftsSzkice w "Dodaj ręcznie"
+
+9. Poprawki techniczne
+
+Groq Vision: zmiana modelu z przestarzałego llama-3.2-90b-vision-preview na meta-llama/llama-4-scout-17b-16e-instruct
+callAIJson — osobna funkcja AI dla JSON (używana przez "Dodaj do Projektów"), używa tej samej rotacji modeli co parafraza
+getDoc dodany do importów Firebase
+Vercel redeploy po zmianie klucza API — wymagany ręczny trigger
+
+----
+
+
+----
+
+----
+
 ## PROMPT STARTOWY
 
 Wklej poniższy blok jako pierwszą wiadomość w nowym czacie:
 
----
-
-```
 Cześć! Pracuję nad projektem XPost Manager — zintegrowanym systemem do zarządzania treścią X/Telegram. Wgrywam pliki — traktuj je jako jedyne źródło prawdy. ZAWSZE edytuj wgrane pliki, nigdy nie pisz od nowa.
 
 SYSTEM SKŁADA SIĘ Z 3 KOMPONENTÓW:
