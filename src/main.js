@@ -3558,7 +3558,7 @@ function buildApp() {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <label class="btn btn-primary" style="cursor:pointer;position:relative;white-space:nowrap" id="btn-img-extract">
             📸 Dodaj ze zdjęcia
-            <input type="file" accept="image/*" capture="environment" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="extractTextFromImage(this)">
+            <input type="file" accept="image/*" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="extractTextFromImage(this)">
           </label>
           <span id="img-extract-status" style="font-size:12px;color:var(--neon)"></span>
           <button class="btn-add" id="btn-add-manual" onclick="toggleManualForm()">+ Dodaj ręcznie</button>
