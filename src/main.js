@@ -3285,7 +3285,7 @@ async function extractTextFromImage(input) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
         body: JSON.stringify({
-          model: 'llama-3.2-90b-vision-preview',
+          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
           max_tokens: 2048,
           messages: [{
             role: 'user',
