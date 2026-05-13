@@ -3297,7 +3297,10 @@ async function extractTextFromImage(input) {
         })
       })
       if (res.status === 429) { trackGroq429(62); throw new Error('Oba modele wyczerpały limity. Spróbuj za chwilę.') }
-      if (!res.ok) throw new Error('Groq Vision error: ' + res.status)
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}))
+        throw new Error(`Groq Vision error: ${res.status} — ${errBody?.error?.message || JSON.stringify(errBody)}`)
+      }
       const data = await res.json()
       const visionToks = (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0)
       trackGroqCall(visionToks)
