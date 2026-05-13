@@ -3223,13 +3223,28 @@ async function extractTextFromImage(input) {
   if (btn)      btn.disabled = true
 
   try {
+    // Kompresuj obraz przed wysłaniem (max 1280px, jakość 85%)
     const base64 = await new Promise((res, rej) => {
-      const reader = new FileReader()
-      reader.onload  = () => res(reader.result.split(',')[1])
-      reader.onerror = rej
-      reader.readAsDataURL(file)
+      const img = new Image()
+      const url = URL.createObjectURL(file)
+      img.onload = () => {
+        URL.revokeObjectURL(url)
+        const MAX = 1280
+        let w = img.width, h = img.height
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = Math.round(h * MAX / w); w = MAX }
+          else       { w = Math.round(w * MAX / h); h = MAX }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = w; canvas.height = h
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+        res(dataUrl.split(',')[1])
+      }
+      img.onerror = rej
+      img.src = url
     })
-    const mimeType = file.type || 'image/jpeg'
+    const mimeType = 'image/jpeg' // zawsze jpeg po kompresji
     let text = ''
 
     // 1. Próbuj Gemini Vision
