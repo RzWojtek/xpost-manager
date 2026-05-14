@@ -3499,7 +3499,7 @@ function buildApp() {
         <select id="f-account" onchange="renderMain()"><option value="">Wszystkie konta</option></select>
         <select id="f-status"  onchange="renderMain()">
           <option value="">Wszystkie statusy</option>
-          <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
+          <option>Nowy</option><option>ZROBIĆ</option><option>Do zrobienia</option><option>W toku</option>
         </select>
         <select id="f-type" onchange="renderMain()">
           <option value="">Posty i RT</option>
