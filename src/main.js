@@ -613,6 +613,7 @@ function copyText(txt) {
 function statusStyle(s) {
   const m = {
     'Nowy':              'background:rgba(0,229,255,.1);color:#00e5ff',
+    'ZROBIĆ':            'background:rgba(239,68,68,.15);color:#ef4444;font-weight:700',
     'Do zrobienia':      'background:rgba(245,158,11,.1);color:#f59e0b',
     'W toku':            'background:rgba(124,58,237,.1);color:#a78bfa',
     'Opublikowane':      'background:rgba(16,185,129,.1);color:#10b981',
@@ -928,7 +929,7 @@ function renderMain() {
         <a class="xlink" href="${p.xLink||'#'}" target="_blank">Otwórz na X ↗</a>
         <span class="post-date">📅 ${p.xDate}</span>
         <select class="status-sel" style="${statusStyle(p.status)}" onchange="setPostStatus('${p.id}',this.value)">
-          ${['Nowy','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
+          ${['Nowy','ZROBIĆ','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
         </select>
       </div>
       ${linksH}${imgsH}
@@ -1735,7 +1736,7 @@ function renderTgSygnaly() {
         <a class="xlink" href="${p.link||'#'}" target="_blank">Otwórz na TG ↗</a>
         <span class="post-date">📅 ${(p.tgDate||'').slice(0,16)}</span>
         <select class="status-sel" style="${statusStyle(p.status)}" onchange="setTgStatus('tgSignals','${docId}',this.value,renderTgSygnaly)">
-          ${['Nowy','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
+          ${['Nowy','ZROBIĆ','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
         </select>
       </div>
       ${refLinksHtml('tgsig_'+docId)}
@@ -1811,7 +1812,7 @@ function renderTgWpisy() {
         <a class="xlink" href="${p.link||'#'}" target="_blank">Otwórz na TG ↗</a>
         <span class="post-date">📅 ${(p.tgDate||'').slice(0,16)}</span>
         <select class="status-sel" style="${statusStyle(p.status)}" onchange="setTgStatus('tgWpisy','${docId}',this.value,renderTgWpisy)">
-          ${['Nowy','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
+          ${['Nowy','ZROBIĆ','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
         </select>
       </div>
       ${refLinksHtml('tgwpisy_'+docId)}
