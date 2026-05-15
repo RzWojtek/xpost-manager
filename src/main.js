@@ -864,15 +864,6 @@ function toggleFilterPanel() {
 }
 
 function resetFilterPanel() {
-  fMaxLines = ''; fMaxChars = ''; fNoLinks = false; fNoMedia = false; fDateFrom = ''; fDateTo = ''
-  const ids = ['f-max-lines','f-max-chars','f-date-from','f-date-to']
-  ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = '' })
-  const chks = ['f-no-links','f-no-media']
-  chks.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false })
-  renderMain()
-}
-
-function resetFilterPanel() {
   fMaxLines = ''; fMinLines = ''; fMaxChars = ''; fNoLinks = false; fNoMedia = false
   fDateFrom = ''; fDateTo = ''; fOlderDays = ''; fDupes = false
   const ids = ['f-max-lines','f-min-lines','f-max-chars','f-date-from','f-date-to','f-older-days']
