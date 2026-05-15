@@ -561,11 +561,14 @@ let fExcludeMode = 'any'  // 'any' = LUB (którekolwiek słowo), 'all' = I (wszy
 let fType    = ''
 // Panel szybkiego przeglądu
 let fMaxLines  = ''   // maks. liczba linii tekstu
+let fMinLines  = ''   // min. liczba linii tekstu
 let fMaxChars  = ''   // maks. liczba znaków
 let fNoLinks   = false // tylko wpisy BEZ linków
 let fNoMedia   = false // tylko wpisy BEZ zdjęć
 let fDateFrom  = ''   // od daty
 let fDateTo    = ''   // do daty
+let fOlderDays = ''   // starsze niż X dni
+let fDupes     = false // tylko duplikaty (ten sam początek)
 let fPanelOpen = false // czy panel rozwinięty
 
 // TG filter state
@@ -869,18 +872,58 @@ function resetFilterPanel() {
   renderMain()
 }
 
-async function rejectAllVisible() {
+function resetFilterPanel() {
+  fMaxLines = ''; fMinLines = ''; fMaxChars = ''; fNoLinks = false; fNoMedia = false
+  fDateFrom = ''; fDateTo = ''; fOlderDays = ''; fDupes = false
+  const ids = ['f-max-lines','f-min-lines','f-max-chars','f-date-from','f-date-to','f-older-days']
+  ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = '' })
+  const chks = ['f-no-links','f-no-media','f-dupes']
+  chks.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false })
+  // Wyczyść też szybkie przyciski dat
+  document.querySelectorAll('.f-date-btn').forEach(b => b.classList.remove('active'))
+  renderMain()
+}
+
+function selectAllVisible() {
   const cards = document.querySelectorAll('#main-cards .card')
-  const ids   = [...cards].map(c => c.id.replace('card-','')).filter(Boolean)
-  if (!ids.length) { toast('Brak wpisów do odrzucenia'); return }
-  if (!confirm(`Odrzucić wszystkie ${ids.length} widocznych wpisów?`)) return
-  await Promise.all(ids.map(id => {
-    if (!posts[id]) return
-    posts[id].status = 'Odrzucone'
-    return updateDoc(doc(db,'posts',id), { status: 'Odrzucone' })
-  }))
-  renderMain(); updateStats(); updateBadges()
-  toast(`Odrzucono ${ids.length} wpisów ✓`)
+  cards.forEach(c => {
+    const id = c.id.replace('card-', '')
+    if (!id) return
+    mainSelected.add(id)
+    const chk = c.querySelector('.main-chk')
+    if (chk) chk.checked = true
+  })
+  updateMainBulkBar()
+  toast(`Zaznaczono ${mainSelected.size} wpisów`)
+}
+
+function setDateFilter(type) {
+  const today = new Date()
+  const pad   = n => String(n).padStart(2,'0')
+  const fmt   = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
+  const todayStr = fmt(today)
+  const yest = new Date(today); yest.setDate(yest.getDate()-1)
+  const week = new Date(today); week.setDate(week.getDate()-6)
+
+  const fromEl = document.getElementById('f-date-from')
+  const toEl   = document.getElementById('f-date-to')
+  document.querySelectorAll('.f-date-btn').forEach(b => b.classList.remove('active'))
+  const btn = document.getElementById(`fdb-${type}`)
+  if (btn) btn.classList.add('active')
+
+  if (type === 'today') {
+    if (fromEl) fromEl.value = todayStr
+    if (toEl)   toEl.value   = todayStr
+  } else if (type === 'yesterday') {
+    if (fromEl) fromEl.value = fmt(yest)
+    if (toEl)   toEl.value   = todayStr
+  } else if (type === 'week') {
+    if (fromEl) fromEl.value = fmt(week)
+    if (toEl)   toEl.value   = todayStr
+  }
+  fDateFrom = fromEl?.value || ''
+  fDateTo   = toEl?.value   || ''
+  renderMain()
 }
 
 // ── RENDER: MAIN ──────────────────────────────────────────────────
@@ -900,17 +943,49 @@ function renderMain() {
   if (selExMode) fExcludeMode = selExMode.value
   // Panel szybkiego przeglądu
   const inpMaxLines = document.getElementById('f-max-lines')
+  const inpMinLines = document.getElementById('f-min-lines')
   const inpMaxChars = document.getElementById('f-max-chars')
   const chkNoLinks  = document.getElementById('f-no-links')
   const chkNoMedia  = document.getElementById('f-no-media')
   const inpDateFrom = document.getElementById('f-date-from')
   const inpDateTo   = document.getElementById('f-date-to')
-  if (inpMaxLines) fMaxLines = inpMaxLines.value
-  if (inpMaxChars) fMaxChars = inpMaxChars.value
-  if (chkNoLinks)  fNoLinks  = chkNoLinks.checked
-  if (chkNoMedia)  fNoMedia  = chkNoMedia.checked
-  if (inpDateFrom) fDateFrom = inpDateFrom.value
-  if (inpDateTo)   fDateTo   = inpDateTo.value
+  const inpOlderDays= document.getElementById('f-older-days')
+  const chkDupes    = document.getElementById('f-dupes')
+  if (inpMaxLines)  fMaxLines  = inpMaxLines.value
+  if (inpMinLines)  fMinLines  = inpMinLines.value
+  if (inpMaxChars)  fMaxChars  = inpMaxChars.value
+  if (chkNoLinks)   fNoLinks   = chkNoLinks.checked
+  if (chkNoMedia)   fNoMedia   = chkNoMedia.checked
+  if (inpDateFrom)  fDateFrom  = inpDateFrom.value
+  if (inpDateTo)    fDateTo    = inpDateTo.value
+  if (inpOlderDays) fOlderDays = inpOlderDays.value
+  if (chkDupes)     fDupes     = chkDupes.checked
+
+  // Wykryj duplikaty — wpisy z tym samym początkiem tekstu (pierwsze 60 znaków)
+  const dupeSet = new Set()
+  const dupeIds = new Set()
+  if (fDupes) {
+    Object.values(posts).forEach(p => {
+      if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return
+      const key = p.text.trim().slice(0, 60).toLowerCase()
+      if (dupeSet.has(key)) dupeIds.add(p.id)
+      else dupeSet.add(key)
+    })
+    // Dodaj też oryginały które mają duplikat
+    const keyCount = {}
+    Object.values(posts).forEach(p => {
+      if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return
+      const key = p.text.trim().slice(0, 60).toLowerCase()
+      keyCount[key] = (keyCount[key] || 0) + 1
+    })
+    Object.values(posts).forEach(p => {
+      if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return
+      const key = p.text.trim().slice(0, 60).toLowerCase()
+      if (keyCount[key] > 1) dupeIds.add(p.id)
+    })
+  }
+
+  const now = new Date()
 
   const list = Object.values(posts).filter(p => {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
@@ -933,6 +1008,10 @@ function renderMain() {
       const lines = p.text.split('\n').filter(l => l.trim()).length
       if (lines > parseInt(fMaxLines)) return false
     }
+    if (fMinLines) {
+      const lines = p.text.split('\n').filter(l => l.trim()).length
+      if (lines < parseInt(fMinLines)) return false
+    }
     if (fMaxChars) {
       if (p.text.length > parseInt(fMaxChars)) return false
     }
@@ -951,6 +1030,12 @@ function renderMain() {
       const d = (p.xDate||p.addedAt||'').slice(0,10)
       if (d > fDateTo) return false
     }
+    if (fOlderDays) {
+      const d    = new Date(p.xDate||p.addedAt||'')
+      const diff = (now - d) / (1000*60*60*24)
+      if (diff < parseInt(fOlderDays)) return false
+    }
+    if (fDupes && !dupeIds.has(p.id)) return false
     return true
   }).sort((a,b) => (b.xDate||b.addedAt).localeCompare(a.xDate||a.addedAt))
 
@@ -3602,9 +3687,17 @@ function buildApp() {
         <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">🔍 Szybki przegląd — filtry zaawansowane</div>
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:12px">
 
+          <!-- Min. linie -->
+          <div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Min. linii</div>
+            <input id="f-min-lines" type="number" min="1" max="50" placeholder="np. 10"
+              oninput="renderMain()"
+              style="width:80px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
+          </div>
+
           <!-- Maks. linie -->
           <div>
-            <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Maks. linii tekstu</div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Maks. linii</div>
             <input id="f-max-lines" type="number" min="1" max="50" placeholder="np. 3"
               oninput="renderMain()"
               style="width:80px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
@@ -3618,14 +3711,30 @@ function buildApp() {
               style="width:90px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
           </div>
 
-          <!-- Data od -->
+          <!-- Starsze niż X dni -->
+          <div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Starsze niż (dni)</div>
+            <input id="f-older-days" type="number" min="1" placeholder="np. 7"
+              oninput="renderMain()"
+              style="width:90px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
+          </div>
+
+          <!-- Szybkie przyciski dat -->
+          <div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Szybka data</div>
+            <div style="display:flex;gap:4px">
+              <button id="fdb-today" class="btn f-date-btn" onclick="setDateFilter('today')" style="font-size:11px;padding:4px 8px;white-space:nowrap">Dziś</button>
+              <button id="fdb-yesterday" class="btn f-date-btn" onclick="setDateFilter('yesterday')" style="font-size:11px;padding:4px 8px;white-space:nowrap">Wczoraj+dziś</button>
+              <button id="fdb-week" class="btn f-date-btn" onclick="setDateFilter('week')" style="font-size:11px;padding:4px 8px;white-space:nowrap">Ten tydzień</button>
+            </div>
+          </div>
+
+          <!-- Data od/do ręcznie -->
           <div>
             <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Data od</div>
             <input id="f-date-from" type="date" onchange="renderMain()"
               style="padding:5px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
           </div>
-
-          <!-- Data do -->
           <div>
             <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Data do</div>
             <input id="f-date-to" type="date" onchange="renderMain()"
@@ -3642,6 +3751,10 @@ function buildApp() {
               <input type="checkbox" id="f-no-media" onchange="renderMain()" style="width:14px;height:14px;accent-color:var(--neon);cursor:pointer">
               Tylko bez mediów
             </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="f-dupes" onchange="renderMain()" style="width:14px;height:14px;accent-color:var(--neon4);cursor:pointer">
+              <span style="color:#f59e0b">Tylko duplikaty</span>
+            </label>
           </div>
 
         </div>
@@ -3649,8 +3762,8 @@ function buildApp() {
         <!-- Akcje masowe -->
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:10px">
           <span id="main-panel-count" style="font-size:12px;color:var(--text3)"></span>
-          <button class="btn btn-danger" onclick="rejectAllVisible()" style="font-size:12px;padding:5px 14px;white-space:nowrap">
-            🗑 Odrzuć wszystkie widoczne
+          <button class="btn btn-primary" onclick="selectAllVisible()" style="font-size:12px;padding:5px 14px;white-space:nowrap">
+            ☑ Zaznacz wszystkie widoczne
           </button>
           <button class="btn" onclick="resetFilterPanel()" style="font-size:12px;padding:5px 14px;white-space:nowrap">
             ✕ Wyczyść filtry panelu
@@ -4350,7 +4463,7 @@ Object.assign(window, {
   loginGoogle, logout, switchTab, switchSubTab, syncSheets,
   renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText, addToProjects, callAIJson,
   mainToggleOne, updateMainBulkBar, deleteMainSelected,
-  toggleFilterPanel, resetFilterPanel, rejectAllVisible,
+  toggleFilterPanel, resetFilterPanel, selectAllVisible, setDateFilter,
   showAccountPanel, closeAccountPanel,
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
   addMyPost, toggleMyForm, publishMyPost, deleteMyPost, saveMyNote,
