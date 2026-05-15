@@ -559,6 +559,14 @@ let fSearch  = ''
 let fExclude = ''
 let fExcludeMode = 'any'  // 'any' = LUB (którekolwiek słowo), 'all' = I (wszystkie słowa)
 let fType    = ''
+// Panel szybkiego przeglądu
+let fMaxLines  = ''   // maks. liczba linii tekstu
+let fMaxChars  = ''   // maks. liczba znaków
+let fNoLinks   = false // tylko wpisy BEZ linków
+let fNoMedia   = false // tylko wpisy BEZ zdjęć
+let fDateFrom  = ''   // od daty
+let fDateTo    = ''   // do daty
+let fPanelOpen = false // czy panel rozwinięty
 
 // TG filter state
 let tgSigChannel = ''
@@ -843,6 +851,38 @@ function refSelectHtml() {
     list.map(r => `<option value="${r.url}">${r.name}</option>`).join('')
 }
 
+function toggleFilterPanel() {
+  fPanelOpen = !fPanelOpen
+  const panel = document.getElementById('main-filter-panel')
+  const btn   = document.getElementById('btn-filter-panel')
+  if (!panel || !btn) return
+  panel.style.display = fPanelOpen ? 'block' : 'none'
+  btn.textContent = fPanelOpen ? '🔍 Szybki przegląd ▲' : '🔍 Szybki przegląd ▼'
+}
+
+function resetFilterPanel() {
+  fMaxLines = ''; fMaxChars = ''; fNoLinks = false; fNoMedia = false; fDateFrom = ''; fDateTo = ''
+  const ids = ['f-max-lines','f-max-chars','f-date-from','f-date-to']
+  ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = '' })
+  const chks = ['f-no-links','f-no-media']
+  chks.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false })
+  renderMain()
+}
+
+async function rejectAllVisible() {
+  const cards = document.querySelectorAll('#main-cards .card')
+  const ids   = [...cards].map(c => c.id.replace('card-','')).filter(Boolean)
+  if (!ids.length) { toast('Brak wpisów do odrzucenia'); return }
+  if (!confirm(`Odrzucić wszystkie ${ids.length} widocznych wpisów?`)) return
+  await Promise.all(ids.map(id => {
+    if (!posts[id]) return
+    posts[id].status = 'Odrzucone'
+    return updateDoc(doc(db,'posts',id), { status: 'Odrzucone' })
+  }))
+  renderMain(); updateStats(); updateBadges()
+  toast(`Odrzucono ${ids.length} wpisów ✓`)
+}
+
 // ── RENDER: MAIN ──────────────────────────────────────────────────
 function renderMain() {
   // Pobierz aktualne wartości filtrów z DOM (FIX: filtry)
@@ -858,12 +898,24 @@ function renderMain() {
   if (inpEx)  fExclude = inpEx.value.toLowerCase()
   const selExMode = document.getElementById('f-exclude-mode')
   if (selExMode) fExcludeMode = selExMode.value
+  // Panel szybkiego przeglądu
+  const inpMaxLines = document.getElementById('f-max-lines')
+  const inpMaxChars = document.getElementById('f-max-chars')
+  const chkNoLinks  = document.getElementById('f-no-links')
+  const chkNoMedia  = document.getElementById('f-no-media')
+  const inpDateFrom = document.getElementById('f-date-from')
+  const inpDateTo   = document.getElementById('f-date-to')
+  if (inpMaxLines) fMaxLines = inpMaxLines.value
+  if (inpMaxChars) fMaxChars = inpMaxChars.value
+  if (chkNoLinks)  fNoLinks  = chkNoLinks.checked
+  if (chkNoMedia)  fNoMedia  = chkNoMedia.checked
+  if (inpDateFrom) fDateFrom = inpDateFrom.value
+  if (inpDateTo)   fDateTo   = inpDateTo.value
 
   const list = Object.values(posts).filter(p => {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
     if (fAccount && p.account !== fAccount) return false
     if (fStatus  && p.status  !== fStatus)  return false
-    // isRT może być ustawione przez bota LUB wykryte z nazwy konta (stare wpisy)
     const isRT = p.isRT || (p.account && p.account.includes(' RT @'))
     if (fType === 'rt'   && !isRT)  return false
     if (fType === 'post' &&  isRT)  return false
@@ -872,9 +924,32 @@ function renderMain() {
       const txt = p.text.toLowerCase()
       const words = fExclude.split(/\s+/).filter(Boolean)
       const match = fExcludeMode === 'any'
-        ? words.some(w => txt.includes(w))   // LUB — ukryj jeśli ma którekolwiek
-        : words.every(w => txt.includes(w))  // I   — ukryj jeśli ma wszystkie
+        ? words.some(w => txt.includes(w))
+        : words.every(w => txt.includes(w))
       if (match) return false
+    }
+    // Panel filtrów zaawansowanych
+    if (fMaxLines) {
+      const lines = p.text.split('\n').filter(l => l.trim()).length
+      if (lines > parseInt(fMaxLines)) return false
+    }
+    if (fMaxChars) {
+      if (p.text.length > parseInt(fMaxChars)) return false
+    }
+    if (fNoLinks) {
+      const hasLink = /https?:\/\/\S+/.test(p.text) || (p.links && p.links.length > 0)
+      if (hasLink) return false
+    }
+    if (fNoMedia) {
+      if (p.imgs && p.imgs.length > 0) return false
+    }
+    if (fDateFrom) {
+      const d = (p.xDate||p.addedAt||'').slice(0,10)
+      if (d < fDateFrom) return false
+    }
+    if (fDateTo) {
+      const d = (p.xDate||p.addedAt||'').slice(0,10)
+      if (d > fDateTo) return false
     }
     return true
   }).sort((a,b) => (b.xDate||b.addedAt).localeCompare(a.xDate||a.addedAt))
@@ -895,6 +970,10 @@ function renderMain() {
   const el = document.getElementById('main-cards')
   if (!el) return
   if (!list.length) { el.innerHTML = '<div class="empty">Brak wpisów pasujących do filtrów.</div>'; return }
+
+  // Aktualizuj licznik w panelu
+  const panelCount = document.getElementById('main-panel-count')
+  if (panelCount) panelCount.textContent = `Widocznych wpisów: ${list.length}`
 
   // Bulk bar — pokaż/ukryj
   updateMainBulkBar()
@@ -3513,6 +3592,72 @@ function buildApp() {
           <option value="all">I</option>
         </select>
       </div>
+      <!-- Przycisk panelu szybkiego przeglądu -->
+      <div style="margin-bottom:8px">
+        <button id="btn-filter-panel" onclick="toggleFilterPanel()" class="btn" style="font-size:12px;padding:5px 12px">🔍 Szybki przegląd ▼</button>
+      </div>
+
+      <!-- Panel szybkiego przeglądu -->
+      <div id="main-filter-panel" style="display:none;margin-bottom:12px;padding:14px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl)">
+        <div style="font-size:12px;font-weight:700;color:var(--neon);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">🔍 Szybki przegląd — filtry zaawansowane</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:12px">
+
+          <!-- Maks. linie -->
+          <div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Maks. linii tekstu</div>
+            <input id="f-max-lines" type="number" min="1" max="50" placeholder="np. 3"
+              oninput="renderMain()"
+              style="width:80px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
+          </div>
+
+          <!-- Maks. znaki -->
+          <div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Maks. znaków</div>
+            <input id="f-max-chars" type="number" min="1" placeholder="np. 200"
+              oninput="renderMain()"
+              style="width:90px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
+          </div>
+
+          <!-- Data od -->
+          <div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Data od</div>
+            <input id="f-date-from" type="date" onchange="renderMain()"
+              style="padding:5px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
+          </div>
+
+          <!-- Data do -->
+          <div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:3px">Data do</div>
+            <input id="f-date-to" type="date" onchange="renderMain()"
+              style="padding:5px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px">
+          </div>
+
+          <!-- Checkboxy -->
+          <div style="display:flex;flex-direction:column;gap:6px;padding-bottom:2px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="f-no-links" onchange="renderMain()" style="width:14px;height:14px;accent-color:var(--neon);cursor:pointer">
+              Tylko bez linków
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="f-no-media" onchange="renderMain()" style="width:14px;height:14px;accent-color:var(--neon);cursor:pointer">
+              Tylko bez mediów
+            </label>
+          </div>
+
+        </div>
+
+        <!-- Akcje masowe -->
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:10px">
+          <span id="main-panel-count" style="font-size:12px;color:var(--text3)"></span>
+          <button class="btn btn-danger" onclick="rejectAllVisible()" style="font-size:12px;padding:5px 14px;white-space:nowrap">
+            🗑 Odrzuć wszystkie widoczne
+          </button>
+          <button class="btn" onclick="resetFilterPanel()" style="font-size:12px;padding:5px 14px;white-space:nowrap">
+            ✕ Wyczyść filtry panelu
+          </button>
+        </div>
+      </div>
+
       <!-- Bulk bar — pojawia się gdy zaznaczone wpisy -->
       <div id="main-bulk-bar" style="display:none;align-items:center;gap:8px;padding:9px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);margin-bottom:10px;flex-wrap:wrap">
         <span id="main-bulk-count" style="font-size:13px;font-weight:700;color:var(--neon4)"></span>
@@ -4205,6 +4350,7 @@ Object.assign(window, {
   loginGoogle, logout, switchTab, switchSubTab, syncSheets,
   renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText, addToProjects, callAIJson,
   mainToggleOne, updateMainBulkBar, deleteMainSelected,
+  toggleFilterPanel, resetFilterPanel, rejectAllVisible,
   showAccountPanel, closeAccountPanel,
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
   addMyPost, toggleMyForm, publishMyPost, deleteMyPost, saveMyNote,
