@@ -673,7 +673,91 @@ getDoc dodany do importów Firebase
 Vercel redeploy po zmianie klucza API — wymagany ręczny trigger
 
 ----
+Oto podsumowanie wszystkich zmian z tej sesji:
 
+Zmiany — sesja (panel szybkiego przeglądu + pozostałe)
+1. Nowy status "ZROBIĆ" w zakładce Wpisy
+
+Dodano status ZROBIĆ do dropdownów statusów we Wpisach, TG Sygnałach i TG Wpisach
+Kolor: czerwony z font-weight:700 — wyróżnia się od innych statusów
+Dodano do filtra statusów w wyszukiwarce zakładki Wpisy
+Funkcja statusStyle() obsługuje nowy status
+
+
+2. Panel szybkiego przeglądu w zakładce Wpisy
+Przycisk 🔍 Szybki przegląd ▼ pod istniejącymi filtrami — rozwija panel zaawansowanych filtrów.
+Nowe zmienne stanu:
+jslet fMinLines  = ''    // min. liczba linii
+let fMaxLines  = ''    // maks. liczba linii
+let fMaxChars  = ''    // maks. liczba znaków
+let fNoLinks   = false // tylko bez linków
+let fNoMedia   = false // tylko bez mediów
+let fDateFrom  = ''    // od daty
+let fDateTo    = ''    // do daty
+let fOlderDays = ''    // starsze niż X dni
+let fDupes     = false // tylko duplikaty
+let fPanelOpen = false // stan rozwinięcia panelu
+Filtry w panelu:
+
+Min. linii — tylko wpisy z co najmniej N niepustymi liniami (np. >10 = długie wpisy)
+Maks. linii — tylko wpisy z max N liniami (np. <3 = krótkie wpisy)
+Maks. znaków — tylko wpisy krótsze niż N znaków
+Starsze niż X dni — tylko wpisy starsze niż podana liczba dni (np. 7 = zaległości)
+Szybkie przyciski dat: Dziś / Wczoraj+dziś / Ten tydzień — ustawiają pola od/do jednym kliknięciem, podświetlają się po aktywacji (klasa .f-date-btn.active)
+Data od / Data do — ręczny zakres dat po xDate
+Tylko bez linków — checkbox, wyklucza wpisy z URL w treści lub polu links
+Tylko bez mediów — checkbox, wyklucza wpisy z imgs.length > 0
+Tylko duplikaty — checkbox (żółty), wykrywa wpisy z identycznym początkiem tekstu (pierwsze 60 znaków). Pokazuje wszystkie egzemplarze
+
+Akcje w panelu:
+
+☑ Zaznacz wszystkie widoczne — zaznacza checkboxy wszystkich widocznych kart i dodaje do mainSelected. Następnie bulk bar pozwala "Odrzuć zaznaczone"
+✕ Wyczyść filtry panelu — resetuje tylko filtry panelu, główne filtry zostają
+
+Licznik: Widocznych wpisów: N — aktualizowany przy każdym renderowaniu
+Nowe funkcje JS:
+
+toggleFilterPanel() — otwiera/zamyka panel
+resetFilterPanel() — czyści wszystkie filtry panelu
+selectAllVisible() — zaznacza wszystkie widoczne karty
+setDateFilter(type) — obsługuje szybkie przyciski dat ('today', 'yesterday', 'week')
+
+
+3. Szybki podgląd profilu (@konto) w zakładce Wpisy
+
+Kliknięcie na @konto otwiera modal z podglądem profilu
+Statystyki konta: Nowe / Do zrobienia / W toku / Opublikowane
+Lista 15 ostatnich aktywnych wpisów z datą, statusem, skróconą treścią
+Link "Otwórz na X ↗"
+Zamknięcie: ✕, klik w tło, klawisz Escape
+Funkcje: showAccountPanel(account), closeAccountPanel()
+
+
+4. Naprawa błędu Groq Vision (zdjęcie → tekst)
+
+Stary model llama-3.2-90b-vision-preview wycofany przez Groq → zamieniony na meta-llama/llama-4-scout-17b-16e-instruct
+Dodano szczegółowy komunikat błędu z treścią odpowiedzi API
+Dodano kompresję obrazu przed wysłaniem (max 1280px, JPEG 85%) — canvas API
+Usunięto capture="environment" z input file → telefon pokazuje wybór galeria/aparat zamiast wymuszać aparat
+
+
+5. Status API Groq — lokalny licznik (Ustawienia)
+
+Zastąpiono próbę odczytu nagłówków CORS (niemożliwe w przeglądarce) lokalnym licznikiem w localStorage
+Klucz: groqUsage_v1
+Trzy paski postępu: RPM (30/min), TPM (6000/min), RPD (1000/dzień)
+Kolory: zielony >50%, żółty >20%, czerwony ≤20%
+Countdown do resetu minutowego i dziennego (północ UTC), odświeżany co sekundę
+Alert 429 z licznikiem "Dostępne za: Xs" gdy Groq zwróci rate limit
+Dane zbierane automatycznie przy każdej parafrazie i Groq Vision
+Przycisk "Resetuj licznik" czyści localStorage
+Funkcje: trackGroqCall(tokensUsed), trackGroq429(retryAfterSec), renderGroqStatusCard(), checkGroqStatus(), resetGroqCounter()
+
+
+6. Pozostałe poprawki
+
+Bulk bar Wpisy: "Odrzuć zaznaczone" ustawia status:'Odrzucone' zamiast kasować dokument — wpis nie wraca po ponownym pobraniu przez bota
+Vercel redeploy: Po zmianie zmiennej środowiskowej (VITE_GROQ_API_KEY) wymagany ręczny trigger — przez Deployments → Redeploy lub pusty commit na GitHub
 
 ----
 
