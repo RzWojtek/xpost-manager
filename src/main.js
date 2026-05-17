@@ -521,12 +521,27 @@ async function triggerAIPara(postId, btn) {
 
   try {
     const result = await paraphraseWithAI(sourceText)
+    // ── MOD 1: dopasuj linki ref ──────────────────────────────────
+    const getDomain = url => { try { return new URL(url).hostname.replace('www.','') } catch { return '' } }
+    const postLinks = post?.links || []
+    const refList   = Object.values(refLinks)
+    const linkLines = postLinks.map(link => {
+      const linkDomain = getDomain(link)
+      const matched = refList.find(r => getDomain(r.url) === linkDomain)
+      if (matched) return `🔗 ${matched.name}: ${matched.url}`
+      if (linkDomain) return `🔗 ${linkDomain}: ${link}`
+      return null
+    }).filter(Boolean)
+    const finalText = linkLines.length
+      ? result.text + '\n\n' + linkLines.join('\n')
+      : result.text
+    // ─────────────────────────────────────────────────────────────
     // Wstaw do textarea
-    ta.value = result.text
+    ta.value = finalText
     if (modelInfo) modelInfo.textContent = `✅ ${result.model}`
     // Zapisz do Firebase — dokładnie tak samo jak savePara()
-    if (posts[postId]) posts[postId].para = result.text
-    await updateDoc(doc(db, 'posts', postId), { para: result.text })
+    if (posts[postId]) posts[postId].para = finalText
+    await updateDoc(doc(db, 'posts', postId), { para: finalText })
     toast('Parafraza wygenerowana i zapisana ✓')
   } catch (err) {
     if (modelInfo) modelInfo.textContent = `❌ ${err.message}`
@@ -549,6 +564,14 @@ let konta      = {}   // kategorie kont: { katId: { id, name, icon, note, accoun
 let airdropTasks = {}
 let aiTools      = {} // narzędzia AI: { docId: { id, name, desc, category, free, url, rating, tags, addedAt } }
 let manualDrafts = {} // szkice w "Dodaj ręcznie": { docId: { id, text, account, xLink, note, addedAt } }
+
+// ── MOD 4/8: VPS-API state ────────────────────────────────────────
+let vpsAccountsX  = []
+let vpsTgSignals  = []
+let vpsTgWpisy    = []
+
+const vpsHeaders = () => ({'Content-Type':'application/json','X-API-Key': import.meta.env.VITE_VPS_API_KEY || ''})
+const vpsUrl = path => (import.meta.env.VITE_VPS_URL || '') + path
 
 let emojis     = ['💸','💰','👇','👉','✨','⭕','➖','📌','🔹','🔗','🧵','💥','✅','💯','📝','📆','🎟️','📸','➡️','📍','‼️','❗','⏩','⏪','▶️','◀️','🔽','⬇️','↔️','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🚨','🏆','📈','🔥','🚀','🧬','🌟','✔','🪂','🎟','⚠️','💎','⭐','🎁','💡']
 
@@ -829,6 +852,8 @@ function switchSubTab(name) {
   if (pageEl) pageEl.classList.add('active')
   const fn = {archiwum:renderArchive, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, kalendarz:renderKalendarz, ustawienia:renderAtSettings, archprojekty:renderArchProjekty}
   if (fn[name]) fn[name]()
+  // MOD 8: załaduj konta VPS przy wejściu w ustawienia
+  if (name === 'ustawienia') loadVpsAccounts().then(() => renderAtSettings())
 }
 
 // ── REF CHIPS ─────────────────────────────────────────────────────
@@ -2939,6 +2964,63 @@ function renderAtSettings() {
         </div>
       </div>
 
+      ${import.meta.env.VITE_VPS_URL ? `
+      <!-- MOD 8: OBSERWOWANE KONTA X -->
+      <div class="form-card">
+        <div class="form-title">📋 Obserwowane konta X</div>
+        <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
+          ${vpsAccountsX.length ? vpsAccountsX.map(acc => `
+            <div style="display:flex;gap:6px;align-items:center">
+              <span style="flex:1;font-size:13px;color:var(--text)">@${acc}</span>
+              <button class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="vpsRemoveAccountX('${acc}')">✕</button>
+            </div>`).join('') : '<div style="font-size:12px;color:var(--text3)">Ładowanie...</div>'}
+        </div>
+        <div style="display:flex;gap:6px">
+          <input id="vps-x-input" class="form-input" placeholder="nowekonto (bez @)" style="flex:1">
+          <button class="btn btn-primary" style="white-space:nowrap" onclick="vpsAddAccountX()">+ Dodaj</button>
+        </div>
+      </div>
+
+      <!-- MOD 8: KANAŁY TG SYGNAŁY -->
+      <div class="form-card">
+        <div class="form-title">📢 Kanały TG — Sygnały</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Kanały numeryczne wpisuj z prefiksem -100</div>
+        <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
+          ${vpsTgSignals.length ? vpsTgSignals.map(ch => `
+            <div style="display:flex;gap:6px;align-items:center">
+              <span style="flex:1;font-size:13px;color:var(--text);font-family:monospace">${ch}</span>
+              <button class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="vpsRemoveTg('signals','${ch}')">✕</button>
+            </div>`).join('') : '<div style="font-size:12px;color:var(--text3)">Ładowanie...</div>'}
+        </div>
+        <div style="display:flex;gap:6px">
+          <input id="vps-tg-signals-input" class="form-input" placeholder="@kanał lub -100123456789" style="flex:1">
+          <button class="btn btn-primary" style="white-space:nowrap" onclick="vpsAddTg('signals')">+ Dodaj</button>
+        </div>
+      </div>
+
+      <!-- MOD 8: KANAŁY TG WPISY -->
+      <div class="form-card">
+        <div class="form-title">📢 Kanały TG — Wpisy</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Kanały numeryczne wpisuj z prefiksem -100</div>
+        <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
+          ${vpsTgWpisy.length ? vpsTgWpisy.map(ch => `
+            <div style="display:flex;gap:6px;align-items:center">
+              <span style="flex:1;font-size:13px;color:var(--text);font-family:monospace">${ch}</span>
+              <button class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="vpsRemoveTg('wpisy','${ch}')">✕</button>
+            </div>`).join('') : '<div style="font-size:12px;color:var(--text3)">Ładowanie...</div>'}
+        </div>
+        <div style="display:flex;gap:6px">
+          <input id="vps-tg-wpisy-input" class="form-input" placeholder="@kanał lub -100123456789" style="flex:1">
+          <button class="btn btn-primary" style="white-space:nowrap" onclick="vpsAddTg('wpisy')">+ Dodaj</button>
+        </div>
+      </div>
+      ` : `
+      <div class="form-card">
+        <div class="form-title">⚙️ Zarządzanie kontami VPS</div>
+        <div style="font-size:12px;color:var(--text3)">Aby zarządzać kontami X i kanałami TG, ustaw zmienną <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">VITE_VPS_URL</code> w Vercel.</div>
+      </div>
+      `}
+
     </div>`
 }
 
@@ -3868,6 +3950,16 @@ function buildApp() {
         </div>
       </div>
       <div style="margin-top:20px">
+        <!-- MOD 4: Import z linku X -->
+        <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);padding:14px;margin-bottom:16px">
+          <div style="font-size:13px;font-weight:700;color:var(--neon);margin-bottom:10px">📥 Importuj wpis z X</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="import-x-url" class="form-input" style="flex:1;min-width:200px" placeholder="https://x.com/user/status/...">
+            <button id="btn-import-x" class="btn btn-primary" style="white-space:nowrap" onclick="importFromX()">📥 Pobierz z X</button>
+          </div>
+          <div style="font-size:11px;color:var(--text3);margin-top:6px">Wpis zostanie pobrany przez VPS i pojawi się bezpośrednio w zakładce Wpisy.</div>
+        </div>
+
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
           <span style="font-size:14px;font-weight:700;color:var(--text)">Szkice</span>
           <span id="manual-drafts-badge" style="display:none;font-size:11px;padding:1px 7px;border-radius:8px;background:rgba(0,229,255,.12);color:var(--neon);border:1px solid rgba(0,229,255,.25);font-weight:700">0</span>
@@ -4449,6 +4541,105 @@ function copyRefFromSelect(selectId) {
   copyText(sel.value)
 }
 
+// ── MOD 4: IMPORT Z LINKU X ──────────────────────────────────────
+async function importFromX() {
+  const input = document.getElementById('import-x-url')
+  const url = input?.value.trim()
+  if (!url || !url.includes('/status/')) {
+    toast('Podaj poprawny link do tweeta (x.com/user/status/...)')
+    return
+  }
+  const btn = document.getElementById('btn-import-x')
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Pobieranie...' }
+  try {
+    const res = await fetch(vpsUrl('/fetch-tweet'), {
+      method: 'POST',
+      headers: vpsHeaders(),
+      body: JSON.stringify({ url })
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) throw new Error(data.detail || data.error || 'Nieznany błąd')
+    if (input) input.value = ''
+    toast('✅ Pobrano wpis od ' + data.account)
+    renderMain(); updateBadges()
+  } catch(err) {
+    toast('❌ Błąd importu: ' + err.message)
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📥 Pobierz z X' }
+  }
+}
+
+// ── MOD 8: ZARZĄDZANIE KONTAMI VPS ───────────────────────────────
+async function loadVpsAccounts() {
+  if (!import.meta.env.VITE_VPS_URL) return
+  try {
+    const [rx, rs, rw] = await Promise.all([
+      fetch(vpsUrl('/accounts/x'),           { headers: vpsHeaders() }),
+      fetch(vpsUrl('/accounts/tg/signals'),  { headers: vpsHeaders() }),
+      fetch(vpsUrl('/accounts/tg/wpisy'),    { headers: vpsHeaders() }),
+    ])
+    if (rx.ok) { const d = await rx.json(); vpsAccountsX = d.accounts || [] }
+    if (rs.ok) { const d = await rs.json(); vpsTgSignals = d.channels || [] }
+    if (rw.ok) { const d = await rw.json(); vpsTgWpisy   = d.channels || [] }
+  } catch(e) { console.warn('loadVpsAccounts:', e) }
+}
+
+async function vpsAddAccountX() {
+  const inp = document.getElementById('vps-x-input')
+  const acc = inp?.value.trim().replace(/^@/, '')
+  if (!acc) { toast('Podaj nazwę konta (bez @)'); return }
+  try {
+    const res = await fetch(vpsUrl('/accounts/x/add'), {
+      method: 'POST', headers: vpsHeaders(), body: JSON.stringify({ account: acc })
+    })
+    const d = await res.json()
+    if (!res.ok) throw new Error(d.detail || 'Błąd')
+    inp.value = ''; await loadVpsAccounts(); renderAtSettings()
+    toast('✅ Dodano konto: @' + acc)
+  } catch(e) { toast('❌ ' + e.message) }
+}
+
+async function vpsRemoveAccountX(acc) {
+  try {
+    const res = await fetch(vpsUrl('/accounts/x/remove'), {
+      method: 'DELETE', headers: vpsHeaders(), body: JSON.stringify({ account: acc })
+    })
+    const d = await res.json()
+    if (!res.ok) throw new Error(d.detail || 'Błąd')
+    await loadVpsAccounts(); renderAtSettings()
+    toast('✅ Usunięto: @' + acc)
+  } catch(e) { toast('❌ ' + e.message) }
+}
+
+async function vpsAddTg(type) {
+  const inp = document.getElementById(`vps-tg-${type}-input`)
+  const ch = inp?.value.trim()
+  if (!ch) { toast('Podaj nazwę/ID kanału'); return }
+  try {
+    const res = await fetch(vpsUrl('/accounts/tg/add'), {
+      method: 'POST', headers: vpsHeaders(), body: JSON.stringify({ channel: ch, type })
+    })
+    const d = await res.json()
+    if (!res.ok) throw new Error(d.detail || 'Błąd')
+    inp.value = ''; await loadVpsAccounts(); renderAtSettings()
+    toast('✅ Dodano kanał')
+  } catch(e) { toast('❌ ' + e.message) }
+}
+
+async function vpsRemoveTg(type, ch) {
+  try {
+    const res = await fetch(vpsUrl('/accounts/tg/remove'), {
+      method: 'DELETE', headers: vpsHeaders(), body: JSON.stringify({ channel: ch, type })
+    })
+    const d = await res.json()
+    if (!res.ok) throw new Error(d.detail || 'Błąd')
+    await loadVpsAccounts(); renderAtSettings()
+    toast('✅ Usunięto kanał')
+  } catch(e) { toast('❌ ' + e.message) }
+}
+
+// ── KONIEC: MOD 4/8 ──────────────────────────────────────────────
+
 // ── EXPOSE ────────────────────────────────────────────────────────
 Object.assign(window, {
   loginGoogle, logout, switchTab, switchSubTab, syncSheets,
@@ -4478,7 +4669,16 @@ Object.assign(window, {
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
   checkGroqStatus, renderGroqStatusCard, resetGroqCounter,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
+  importFromX,
+  loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
 })
+
+// ── MOD 5: PWA — Service Worker ───────────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(e => console.warn('SW:', e))
+  })
+}
 
 // ── INIT ──────────────────────────────────────────────────────────
 buildApp()
