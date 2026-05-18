@@ -619,6 +619,15 @@ let tgWpiSelected = new Set() // zaznaczone wpisy TG
 const nowStr = () => new Date().toLocaleString('pl-PL',{hour12:false}).replace(',','')
 // ISO timestamp do sortowania i porównań dat (YYYY-MM-DD HH:MM:SS)
 const nowISO = () => new Date().toISOString().slice(0,19).replace('T',' ')
+
+// Parsuje datę w formacie ISO (2026-05-18) lub PL (18.05.2026) → string sortowalny ISO
+const parseDateToISO = str => {
+  if (!str) return ''
+  // Format PL: DD.MM.YYYY HH:MM:SS
+  const m = str.match(/^(\d{2})\.(\d{2})\.(\d{4})(.*)/)
+  if (m) return `${m[3]}-${m[2]}-${m[1]}${m[4]}`
+  return str
+}
 // Konwertuje datę PL ("30.03.2026 00:28:51") lub ISO na YYYY-MM-DD do porównań
 function parseDateStr(s) {
   if (!s) return ''
@@ -1055,7 +1064,7 @@ function renderMain() {
     }
     if (fDupes && !dupeIds.has(p.id)) return false
     return true
-  }).sort((a,b) => (b.xDate||b.addedAt).localeCompare(a.xDate||a.addedAt))
+  }).sort((a,b) => parseDateToISO(b.xDate||b.addedAt).localeCompare(parseDateToISO(a.xDate||a.addedAt)))
 
   // Odśwież listę kont w filtrze — tylko konta które mają aktywne wpisy
   const accounts = [...new Set(
