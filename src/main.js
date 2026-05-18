@@ -1346,6 +1346,12 @@ function mainToggleOne(id, checked) {
   updateMainBulkBar()
 }
 
+function clearMainSelected() {
+  mainSelected.clear()
+  updateMainBulkBar()
+  renderMain()
+}
+
 function updateMainBulkBar() {
   const bar   = document.getElementById('main-bulk-bar')
   const count = document.getElementById('main-bulk-count')
@@ -1887,14 +1893,17 @@ function updateTgBulkBar(set, barId, countId) {
 }
 
 function tgSelectAll(set, collection, updateFn, renderFn) {
-  // Zaznacz wszystkie widoczne karty
-  document.querySelectorAll(`#${collection}-cards .tg-chk`).forEach(chk => {
+  const chks = document.querySelectorAll(`#${collection}-cards .tg-chk`)
+  if (!chks.length) {
+    toast('Najpierw kliknij 🔄 Odśwież aby załadować wpisy')
+    return
+  }
+  chks.forEach(chk => {
     set.add(chk.dataset.id)
     chk.checked = true
   })
   updateFn()
-  const n = set.size
-  toast(`Zaznaczono ${n} wpisów`)
+  toast(`Zaznaczono ${set.size} wpisów`)
 }
 
 async function tgRejectSelected(set, collectionName, updateFn, renderFn) {
@@ -3938,7 +3947,7 @@ function buildApp() {
       <div id="main-bulk-bar" style="display:none;align-items:center;gap:8px;padding:9px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);margin-bottom:10px;flex-wrap:wrap">
         <span id="main-bulk-count" style="font-size:13px;font-weight:700;color:var(--neon4)"></span>
         <button class="btn btn-danger" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="deleteMainSelected()">Odrzuć zaznaczone</button>
-        <button class="btn" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="mainSelected.clear();updateMainBulkBar();renderMain()">✕ Odznacz</button>
+        <button class="btn" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="clearMainSelected()">✕ Odznacz</button>
       </div>
       <div id="main-cards"><div class="loading">Ładowanie...</div></div>
     </div>
@@ -4748,7 +4757,7 @@ async function vpsRemoveTg(type, ch) {
 Object.assign(window, {
   loginGoogle, logout, switchTab, switchSubTab, syncSheets,
   renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText, addToProjects, callAIJson,
-  mainToggleOne, updateMainBulkBar, deleteMainSelected,
+  mainToggleOne, updateMainBulkBar, clearMainSelected, deleteMainSelected,
   toggleFilterPanel, resetFilterPanel, selectAllVisible, setDateFilter,
   showAccountPanel, closeAccountPanel,
   renderMoje, toggleMyExpand, startMyEdit, cancelMyEdit, saveMyEdit,
