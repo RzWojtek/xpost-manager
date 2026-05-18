@@ -1095,6 +1095,82 @@ TUNNEL_CHECK_INTERVAL=300
 
 ----
 ----
+
+## POPRAWKA: Wpisy manualne niewidoczne przy filtrze "Wszystkie konta"
+
+### Problem
+Wpisy dodane ręcznie przez import z linku X (`fetch_tweet.py`) nie wyświetlały się w zakładce Wpisy przy filtrze "Wszystkie konta". Były widoczne tylko po wybraniu konkretnego konta z listy.
+
+### Przyczyna
+Dwa niezależne błędy:
+
+1. **Format daty** — `fetch_tweet.py` zapisywał `xDate` w formacie polskim (`18.05.2026 02:37:57`), podczas gdy normalne wpisy z xparafbota mają format ISO (`2026-05-18 19:27:00`). Sortowanie w `renderMain()` przez `localeCompare` dawało błędne wyniki przy mieszaniu obu formatów — wpis manualny lądował poza widocznym zakresem.
+
+2. **Sortowanie bez konwersji** — linia sortująca w `main.js` nie konwertowała dat przed porównaniem:
+   ```javascript
+   // ŹLE:
+   .sort((a,b) => (b.xDate||b.addedAt).localeCompare(a.xDate||a.addedAt))
+   ```
+
+### Rozwiązanie
+
+**1. Naprawiono `fetch_tweet.py`** — zmiana formatu daty na ISO:
+```python
+# BYŁO:
+def now_str():
+    return datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+
+# JEST:
+def now_str():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+```
+
+**2. Naprawiono sortowanie w `main.js`** — dodano helper `parseDateToISO()`:
+```javascript
+// Parsuje datę w formacie ISO (2026-05-18) lub PL (18.05.2026) → string sortowalny ISO
+const parseDateToISO = str => {
+  if (!str) return ''
+  const m = str.match(/^(\d{2})\.(\d{2})\.(\d{4})(.*)/)
+  if (m) return `${m[3]}-${m[2]}-${m[1]}${m[4]}`
+  return str
+}
+
+// Sortowanie używa helpera:
+.sort((a,b) => parseDateToISO(b.xDate||b.addedAt).localeCompare(parseDateToISO(a.xDate||a.addedAt)))
+```
+
+**3. Naprawiono istniejące wpisy w Firebase** — jednorazowy skrypt na VPS:
+```bash
+cd /root/vps-api && source venv/bin/activate
+python3 -c "
+import firebase_admin
+from firebase_admin import credentials, firestore
+from datetime import datetime
+
+cred = credentials.Certificate('/root/tgbot/firebase_service_key.json')
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+docs = db.collection('posts').where('manualEntry','==',True).stream()
+for d in docs:
+    data = d.to_dict()
+    xdate = data.get('xDate','')
+    try:
+        dt = datetime.strptime(xdate, '%d.%m.%Y %H:%M:%S')
+        new_date = dt.strftime('%Y-%m-%d %H:%M:%S')
+        db.collection('posts').document(d.id).update({'xDate': new_date, 'addedAt': new_date})
+        print(f'Naprawiono {d.id}: {xdate} -> {new_date}')
+    except:
+        print(f'Pomijam {d.id}: {xdate} (już OK)')
+"
+```
+
+### Zasada na przyszłość
+Wszystkie daty zapisywane do Firebase muszą być w formacie ISO: `YYYY-MM-DD HH:MM:SS`. Dotyczy pól `xDate`, `addedAt`, `archivedAt`. Format PL (`DD.MM.YYYY`) jest używany tylko do wyświetlania w UI, nigdy do zapisu.
+
+----
+
+----
 ----
 
 ----
