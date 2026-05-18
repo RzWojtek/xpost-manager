@@ -1,7 +1,7 @@
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
 import {
-  collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, where, onSnapshot
+  collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, where, limit, onSnapshot
 } from 'firebase/firestore'
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
 
@@ -595,6 +595,7 @@ let fDupes     = false // tylko duplikaty (ten sam początek)
 let fPanelOpen = false // czy panel rozwinięty
 
 // TG filter state
+let tgAutoLoad   = 15  // ile dok TG ładować przy starcie (sync z Firebase airdropConfig/settings)
 let tgSigChannel = ''
 let tgSigStatus  = ''
 let tgSigSearch  = ''
@@ -760,18 +761,20 @@ async function logout() {
 // ── FIREBASE LOAD ─────────────────────────────────────────────────
 async function loadAll() {
   posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}; aiTools = {}; manualDrafts = {}
-  const [ps, ms, rs, ns, tgs, tgw, ks, at, cfg, ait, md] = await Promise.all([
+  // TG dane — ładowane przy starcie z limitem tgAutoLoad (domyślnie 15)
+  const tgLimit = tgAutoLoad || 15
+  const [ps, ms, rs, ns, ks, at, cfg, ait, md, tgs, tgw] = await Promise.all([
     getDocs(query(collection(db,'posts'),         orderBy('xDate','desc'))),
     getDocs(query(collection(db,'myPosts'),       orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
     getDocs(query(collection(db,'notes'),         orderBy('created','desc'))),
-    getDocs(query(collection(db,'tgSignals'),     orderBy('addedAt','desc'))),
-    getDocs(query(collection(db,'tgWpisy'),       orderBy('addedAt','desc'))),
     getDocs(collection(db,'konta')),
     getDocs(query(collection(db,'airdropTasks'),  orderBy('addedAt','desc'))),
     getDoc(doc(db,'airdropConfig','settings')),
     getDocs(query(collection(db,'aiTools'),       orderBy('addedAt','desc'))),
     getDocs(query(collection(db,'manualDrafts'),  orderBy('addedAt','desc'))),
+    getDocs(query(collection(db,'tgSignals'), orderBy('addedAt','desc'), limit(tgLimit))),
+    getDocs(query(collection(db,'tgWpisy'),   orderBy('addedAt','desc'), limit(tgLimit))),
   ])
   ps.forEach(d  => { posts[d.id]         = d.data() })
   ms.forEach(d  => { myPosts[d.id]       = d.data() })
@@ -786,8 +789,9 @@ async function loadAll() {
   // Wczytaj customowe statusy/typy jeśli istnieją
   if (cfg.exists()) {
     const data = cfg.data()
-    if (data.statuses?.length) AT_STATUSES = data.statuses
-    if (data.types?.length)    AT_TYPES    = data.types
+    if (data.statuses?.length)              AT_STATUSES = data.statuses
+    if (data.types?.length)                 AT_TYPES    = data.types
+    if (data.tgAutoLoad !== undefined)      tgAutoLoad  = parseInt(data.tgAutoLoad) || 15
   }
 }
 
@@ -1887,6 +1891,17 @@ function refreshRefInOtherTabs() {
 }
 
 // ── RENDER: TG SYGNAŁY ───────────────────────────────────────────
+// ── TG AUTOLOAD SETTING ──────────────────────────────────────────
+async function saveTgAutoLoad() {
+  const inp = document.getElementById('tg-autoload-input')
+  const val = parseInt(inp?.value || '15')
+  if (isNaN(val) || val < 0 || val > 200) { toast('Podaj liczbę od 0 do 200'); return }
+  tgAutoLoad = val
+  await setDoc(doc(db, 'airdropConfig', 'settings'), { tgAutoLoad: val }, { merge: true })
+  toast(`✅ Zapisano — przy starcie wczytywanych będzie ${val === 0 ? 'brak (tylko Odśwież)' : val + ' ostatnich wpisów TG'}`)
+}
+// ─────────────────────────────────────────────────────────────────
+
 // ── TG BULK SELECT ───────────────────────────────────────────────
 // Wrappery eksponowane do window (ES module nie udostępnia zmiennych z onclick)
 function tgToggleSig(id, checked) { tgToggleOne(tgSigSelected, id, checked, () => updateTgBulkBar(tgSigSelected,'tgsig-bulk-bar','tgsig-bulk-count')) }
@@ -2021,6 +2036,13 @@ function renderTgSygnaly() {
 
   const el = document.getElementById('tgsig-cards')
   if (!el) return
+  if (!Object.keys(tgSignals).length) {
+    const msg = tgAutoLoad === 0
+      ? '📡 Auto-wczytywanie wyłączone. Kliknij <strong>🔄 Odśwież</strong> aby załadować sygnały TG.'
+      : '📡 Kliknij <strong>🔄 Odśwież</strong> aby załadować sygnały TG.'
+    el.innerHTML = `<div class="empty" style="padding:30px;text-align:center">${msg}</div>`
+    return
+  }
   if (!list.length) { el.innerHTML = '<div class="empty">Brak sygnałów pasujących do filtrów.</div>'; return }
 
   el.innerHTML = list.map(([docId, p]) => {
@@ -2102,6 +2124,13 @@ function renderTgWpisy() {
 
   const el = document.getElementById('tgwpisy-cards')
   if (!el) return
+  if (!Object.keys(tgWpisy).length) {
+    const msg = tgAutoLoad === 0
+      ? '📋 Auto-wczytywanie wyłączone. Kliknij <strong>🔄 Odśwież</strong> aby załadować wpisy TG.'
+      : '📋 Kliknij <strong>🔄 Odśwież</strong> aby załadować wpisy TG.'
+    el.innerHTML = `<div class="empty" style="padding:30px;text-align:center">${msg}</div>`
+    return
+  }
   if (!list.length) { el.innerHTML = '<div class="empty">Brak wpisów pasujących do filtrów.</div>'; return }
 
   el.innerHTML = list.map(([docId, p]) => `
@@ -3085,6 +3114,18 @@ function renderAtSettings() {
       </div>
 
       ${import.meta.env.VITE_VPS_URL ? `
+      <!-- USTAWIENIE: TG AUTO-LOAD -->
+      <div class="form-card">
+        <div class="form-title">📡 Wczytywanie TG przy starcie</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Ile ostatnich wpisów z TG Sygnały i TG Wpisy wczytać automatycznie przy każdym otwarciu aplikacji. Mniej = mniej odczytów Firebase.</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="tg-autoload-input" type="number" min="0" max="200" class="form-input" style="width:90px"
+            value="${tgAutoLoad}" placeholder="15">
+          <button class="btn btn-primary" onclick="saveTgAutoLoad()">Zapisz</button>
+          <span style="font-size:11px;color:var(--text3)">0 = wyłączone (tylko przycisk Odśwież)</span>
+        </div>
+      </div>
+
       <!-- MOD 8: OBSERWOWANE KONTA X -->
       <div class="form-card">
         <div class="form-title">📋 Obserwowane konta X</div>
@@ -4803,7 +4844,7 @@ Object.assign(window, {
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
   checkGroqStatus, renderGroqStatusCard, resetGroqCounter,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
-  importFromX, refreshTgData, copyAndOpenX,
+  importFromX, refreshTgData, copyAndOpenX, saveTgAutoLoad,
   tgToggleSig, tgToggleWpi, tgSelectAllSig, tgSelectAllWpi, tgClearSig, tgClearWpi, tgRejectSig, tgRejectWpi,
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
 })
