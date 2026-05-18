@@ -1877,6 +1877,16 @@ function refreshRefInOtherTabs() {
 
 // ── RENDER: TG SYGNAŁY ───────────────────────────────────────────
 // ── TG BULK SELECT ───────────────────────────────────────────────
+// Wrappery eksponowane do window (ES module nie udostępnia zmiennych z onclick)
+function tgToggleSig(id, checked) { tgToggleOne(tgSigSelected, id, checked, () => updateTgBulkBar(tgSigSelected,'tgsig-bulk-bar','tgsig-bulk-count')) }
+function tgToggleWpi(id, checked) { tgToggleOne(tgWpiSelected, id, checked, () => updateTgBulkBar(tgWpiSelected,'tgwpisy-bulk-bar','tgwpisy-bulk-count')) }
+function tgSelectAllSig() { tgSelectAll(tgSigSelected,'tgsig', () => updateTgBulkBar(tgSigSelected,'tgsig-bulk-bar','tgsig-bulk-count'), renderTgSygnaly) }
+function tgSelectAllWpi() { tgSelectAll(tgWpiSelected,'tgwpisy', () => updateTgBulkBar(tgWpiSelected,'tgwpisy-bulk-bar','tgwpisy-bulk-count'), renderTgWpisy) }
+function tgClearSig()     { tgSigSelected.clear(); updateTgBulkBar(tgSigSelected,'tgsig-bulk-bar','tgsig-bulk-count'); renderTgSygnaly() }
+function tgClearWpi()     { tgWpiSelected.clear(); updateTgBulkBar(tgWpiSelected,'tgwpisy-bulk-bar','tgwpisy-bulk-count'); renderTgWpisy() }
+function tgRejectSig()    { tgRejectSelected(tgSigSelected,'tgSignals', () => updateTgBulkBar(tgSigSelected,'tgsig-bulk-bar','tgsig-bulk-count'), renderTgSygnaly) }
+function tgRejectWpi()    { tgRejectSelected(tgWpiSelected,'tgWpisy',   () => updateTgBulkBar(tgWpiSelected,'tgwpisy-bulk-bar','tgwpisy-bulk-count'), renderTgWpisy) }
+
 function tgToggleOne(set, id, checked, updateFn) {
   if (checked) set.add(id)
   else set.delete(id)
@@ -2008,7 +2018,7 @@ function renderTgSygnaly() {
     ).join('') : ''
     return `<div class="card" id="tgsig-card-${docId}">
       <div class="card-head">
-        <input type="checkbox" class="tg-chk" data-id="${docId}" ${tgSigSelected.has(docId)?'checked':''} style="width:15px;height:15px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0;margin-right:2px" onchange="tgToggleOne(tgSigSelected,'${docId}',this.checked,()=>updateTgBulkBar(tgSigSelected,'tgsig-bulk-bar','tgsig-bulk-count'))">
+        <input type="checkbox" class="tg-chk" data-id="${docId}" ${tgSigSelected.has(docId)?'checked':''} style="width:15px;height:15px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0;margin-right:2px" onchange="tgToggleSig('${docId}',this.checked)">
         <span style="font-size:11px;padding:2px 7px;border-radius:10px;background:rgba(0,229,255,.1);color:var(--neon);border:1px solid rgba(0,229,255,.3);font-weight:700">📡 @${p.channel}</span>
         ${kws}
         <a class="xlink" href="${p.link||'#'}" target="_blank">Otwórz na TG ↗</a>
@@ -2086,7 +2096,7 @@ function renderTgWpisy() {
   el.innerHTML = list.map(([docId, p]) => `
     <div class="card" id="tgwpisy-card-${docId}">
       <div class="card-head">
-        <input type="checkbox" class="tg-chk" data-id="${docId}" ${tgWpiSelected.has(docId)?'checked':''} style="width:15px;height:15px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0;margin-right:2px" onchange="tgToggleOne(tgWpiSelected,'${docId}',this.checked,()=>updateTgBulkBar(tgWpiSelected,'tgwpisy-bulk-bar','tgwpisy-bulk-count'))">
+        <input type="checkbox" class="tg-chk" data-id="${docId}" ${tgWpiSelected.has(docId)?'checked':''} style="width:15px;height:15px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0;margin-right:2px" onchange="tgToggleWpi('${docId}',this.checked)">
         <span style="font-size:11px;padding:2px 7px;border-radius:10px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">📋 @${p.channel}</span>
         <a class="xlink" href="${p.link||'#'}" target="_blank">Otwórz na TG ↗</a>
         <span class="post-date">📅 ${(p.tgDate||'').slice(0,16)}</span>
@@ -4304,7 +4314,7 @@ function buildApp() {
             <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
           </select>
           <input id="tgsig-search" placeholder="Szukaj w treści..." oninput="renderTgSygnaly()" style="flex:1;min-width:140px">
-          <button class="btn" style="white-space:nowrap;background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.3)" onclick="tgSelectAll(tgSigSelected,'tgsig',()=>updateTgBulkBar(tgSigSelected,'tgsig-bulk-bar','tgsig-bulk-count'),renderTgSygnaly)">☑ Zaznacz widoczne</button>
+          <button class="btn" style="white-space:nowrap;background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.3)" onclick="tgSelectAllSig()">☑ Zaznacz widoczne</button>
           <button id="btn-refresh-tgsig" class="btn btn-primary" style="white-space:nowrap" onclick="refreshTgData('signals')">🔄 Odśwież</button>
         </div>
         <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
@@ -4312,8 +4322,8 @@ function buildApp() {
         </div>
         <div id="tgsig-bulk-bar" style="display:none;align-items:center;gap:8px;padding:9px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);margin-bottom:10px;flex-wrap:wrap">
           <span id="tgsig-bulk-count" style="font-size:13px;font-weight:700;color:var(--neon4)"></span>
-          <button class="btn btn-danger" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="tgRejectSelected(tgSigSelected,'tgSignals',()=>updateTgBulkBar(tgSigSelected,'tgsig-bulk-bar','tgsig-bulk-count'),renderTgSygnaly)">Odrzuć zaznaczone</button>
-          <button class="btn" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="tgSigSelected.clear();updateTgBulkBar(tgSigSelected,'tgsig-bulk-bar','tgsig-bulk-count');renderTgSygnaly()">✕ Odznacz</button>
+          <button class="btn btn-danger" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="tgRejectSig()">Odrzuć zaznaczone</button>
+          <button class="btn" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="tgClearSig()">✕ Odznacz</button>
         </div>
         <div id="tgsig-cards"><div class="loading">Ładowanie...</div></div>
       </div>
@@ -4333,7 +4343,7 @@ function buildApp() {
             <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
           </select>
           <input id="tgwpisy-search" placeholder="Szukaj w treści..." oninput="renderTgWpisy()" style="flex:1;min-width:140px">
-          <button class="btn" style="white-space:nowrap;background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.3)" onclick="tgSelectAll(tgWpiSelected,'tgwpisy',()=>updateTgBulkBar(tgWpiSelected,'tgwpisy-bulk-bar','tgwpisy-bulk-count'),renderTgWpisy)">☑ Zaznacz widoczne</button>
+          <button class="btn" style="white-space:nowrap;background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.3)" onclick="tgSelectAllWpi()">☑ Zaznacz widoczne</button>
           <button id="btn-refresh-tgwpisy" class="btn btn-primary" style="white-space:nowrap" onclick="refreshTgData('wpisy')">🔄 Odśwież</button>
         </div>
         <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
@@ -4341,8 +4351,8 @@ function buildApp() {
         </div>
         <div id="tgwpisy-bulk-bar" style="display:none;align-items:center;gap:8px;padding:9px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);margin-bottom:10px;flex-wrap:wrap">
           <span id="tgwpisy-bulk-count" style="font-size:13px;font-weight:700;color:var(--neon4)"></span>
-          <button class="btn btn-danger" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="tgRejectSelected(tgWpiSelected,'tgWpisy',()=>updateTgBulkBar(tgWpiSelected,'tgwpisy-bulk-bar','tgwpisy-bulk-count'),renderTgWpisy)">Odrzuć zaznaczone</button>
-          <button class="btn" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="tgWpiSelected.clear();updateTgBulkBar(tgWpiSelected,'tgwpisy-bulk-bar','tgwpisy-bulk-count');renderTgWpisy()">✕ Odznacz</button>
+          <button class="btn btn-danger" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="tgRejectWpi()">Odrzuć zaznaczone</button>
+          <button class="btn" style="font-size:12px;padding:5px 12px;white-space:nowrap" onclick="tgClearWpi()">✕ Odznacz</button>
         </div>
         <div id="tgwpisy-cards"><div class="loading">Ładowanie...</div></div>
       </div>
@@ -4782,7 +4792,8 @@ Object.assign(window, {
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
   checkGroqStatus, renderGroqStatusCard, resetGroqCounter,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
-  importFromX, refreshTgData, tgToggleOne, updateTgBulkBar, tgSelectAll, tgRejectSelected,
+  importFromX, refreshTgData,
+  tgToggleSig, tgToggleWpi, tgSelectAllSig, tgSelectAllWpi, tgClearSig, tgClearWpi, tgRejectSig, tgRejectWpi,
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
 })
 
