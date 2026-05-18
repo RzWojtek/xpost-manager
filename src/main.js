@@ -1,7 +1,7 @@
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
 import {
-  collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, onSnapshot
+  collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, where, onSnapshot
 } from 'firebase/firestore'
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
 
@@ -1868,6 +1868,45 @@ function refreshRefInOtherTabs() {
 }
 
 // ── RENDER: TG SYGNAŁY ───────────────────────────────────────────
+async function refreshTgData(type) {
+  // type: 'signals' | 'wpisy' | 'both'
+  const btnSig = document.getElementById('btn-refresh-tgsig')
+  const btnWpi = document.getElementById('btn-refresh-tgwpisy')
+  const doSig = type === 'signals' || type === 'both'
+  const doWpi = type === 'wpisy'   || type === 'both'
+
+  if (doSig && btnSig) { btnSig.disabled = true; btnSig.textContent = '⏳ Pobieranie...' }
+  if (doWpi && btnWpi) { btnWpi.disabled = true; btnWpi.textContent = '⏳ Pobieranie...' }
+
+  try {
+    const promises = []
+    if (doSig) promises.push(getDocs(query(collection(db,'tgSignals'), orderBy('addedAt','desc'))))
+    if (doWpi) promises.push(getDocs(query(collection(db,'tgWpisy'),   orderBy('addedAt','desc'))))
+    const results = await Promise.all(promises)
+
+    let i = 0
+    if (doSig) {
+      let newSig = 0
+      results[i].forEach(d => { if (!tgSignals[d.id]) newSig++; tgSignals[d.id] = d.data() })
+      i++
+      renderTgSygnaly()
+      toast(`📡 Sygnały odświeżone${newSig ? ` (+${newSig} nowych)` : ' (bez zmian)'}`)
+    }
+    if (doWpi) {
+      let newWpi = 0
+      results[i].forEach(d => { if (!tgWpisy[d.id]) newWpi++; tgWpisy[d.id] = d.data() })
+      renderTgWpisy()
+      toast(`📋 Wpisy TG odświeżone${newWpi ? ` (+${newWpi} nowych)` : ' (bez zmian)'}`)
+    }
+    updateBadges()
+  } catch(e) {
+    toast('❌ Błąd odświeżania TG: ' + e.message)
+  } finally {
+    if (doSig && btnSig) { btnSig.disabled = false; btnSig.textContent = '🔄 Odśwież' }
+    if (doWpi && btnWpi) { btnWpi.disabled = false; btnWpi.textContent = '🔄 Odśwież' }
+  }
+}
+
 function renderTgSygnaly() {
   const selCh = document.getElementById('tgsig-channel')
   const selSt = document.getElementById('tgsig-status')
@@ -4205,6 +4244,7 @@ function buildApp() {
             <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
           </select>
           <input id="tgsig-search" placeholder="Szukaj w treści..." oninput="renderTgSygnaly()" style="flex:1;min-width:140px">
+          <button id="btn-refresh-tgsig" class="btn btn-primary" style="white-space:nowrap" onclick="refreshTgData('signals')">🔄 Odśwież</button>
         </div>
         <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
           ⚡ Sygnały filtrowane według słów kluczowych zdefiniowanych w <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">tg_sygnaly.txt</code> na VPS
@@ -4227,6 +4267,7 @@ function buildApp() {
             <option>Nowy</option><option>Do zrobienia</option><option>W toku</option>
           </select>
           <input id="tgwpisy-search" placeholder="Szukaj w treści..." oninput="renderTgWpisy()" style="flex:1;min-width:140px">
+          <button id="btn-refresh-tgwpisy" class="btn btn-primary" style="white-space:nowrap" onclick="refreshTgData('wpisy')">🔄 Odśwież</button>
         </div>
         <div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:0 2px">
           📋 Wszystkie wiadomości z kanałów zdefiniowanych w <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">tg_wpisy.txt</code> na VPS
@@ -4669,7 +4710,7 @@ Object.assign(window, {
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
   checkGroqStatus, renderGroqStatusCard, resetGroqCounter,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
-  importFromX,
+  importFromX, refreshTgData,
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
 })
 
@@ -4694,19 +4735,8 @@ onAuthStateChanged(auth, async user => {
     updateStats(); updateBadges()
     await syncSheets()
     setInterval(syncSheets, 5 * 60 * 1000)
-    // Odśwież TG dane co 2 minuty (live update bez bota)
-    setInterval(async () => {
-      const [tgs, tgw] = await Promise.all([
-        getDocs(query(collection(db,'tgSignals'), orderBy('addedAt','desc'))),
-        getDocs(query(collection(db,'tgWpisy'),   orderBy('addedAt','desc'))),
-      ])
-      let tgSigNew = 0, tgWpisNew = 0
-      tgs.forEach(d => { if (!tgSignals[d.id]) tgSigNew++; tgSignals[d.id] = d.data() })
-      tgw.forEach(d => { if (!tgWpisy[d.id])   tgWpisNew++; tgWpisy[d.id]  = d.data() })
-      updateBadges()
-      if (tgSigNew > 0) { toast(`📡 ${tgSigNew} nowych sygnałów TG!`); if(document.getElementById('sub-tgsygnaly')?.classList.contains('active')) renderTgSygnaly() }
-      if (tgWpisNew > 0) { toast(`📋 ${tgWpisNew} nowych wpisów TG!`); if(document.getElementById('sub-tgwpisy')?.classList.contains('active')) renderTgWpisy() }
-    }, 2 * 60 * 1000)
+    // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
+    // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
     showAuthScreen()
   }
