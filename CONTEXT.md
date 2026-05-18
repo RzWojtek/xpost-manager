@@ -760,6 +760,342 @@ Bulk bar Wpisy: "Odrzuć zaznaczone" ustawia status:'Odrzucone' zamiast kasować
 Vercel redeploy: Po zmianie zmiennej środowiskowej (VITE_GROQ_API_KEY) wymagany ręczny trigger — przez Deployments → Redeploy lub pusty commit na GitHub
 
 ----
+----
+
+## SESJA: VPS-API + 7 MODYFIKACJI XPost Manager (Maj 2026)
+
+---
+
+### CO ZOSTAŁO ZBUDOWANE
+
+#### 1. Nowy serwer VPS-API (`/root/vps-api/`)
+
+Kompletny nowy serwer FastAPI na porcie 3099, działający jako most między frontendem (Vercel) a VPS.
+
+**Pliki:**
+- `/root/vps-api/main.py` — FastAPI app z endpointami
+- `/root/vps-api/fetch_tweet.py` — skrypt pobierający pojedynczy tweet przez Playwright
+- `/root/vps-api/link_bot.py` — bot Telegram (MOD 3)
+- `/root/vps-api/start.sh` — start serwera przez PM2
+- `/root/vps-api/start_link_bot.sh` — start bota przez PM2
+- `/root/vps-api/tunnel_watcher.py` — automatyczna aktualizacja URL tunelu w Vercel
+- `/root/vps-api/start_tunnel_watcher.sh` — start watchera przez PM2
+- `/root/vps-api/.env` — zmienne środowiskowe serwera
+
+**Uruchomienie PM2:**
+```bash
+pm2 start /root/vps-api/start.sh --name vps-api
+pm2 start bash --name vps-api-tunnel -- -c "cloudflared tunnel --url http://localhost:3099"
+pm2 start /root/vps-api/start_link_bot.sh --name vps-link-bot
+pm2 start /root/vps-api/start_tunnel_watcher.sh --name vps-tunnel-watcher
+pm2 save
+```
+
+**Auth wszystkich endpointów:** header `X-API-Key` musi być równy `VPS_API_KEY` z `.env`.
+
+**Vercel — wymagane zmienne środowiskowe:**
+- `VITE_VPS_URL` — URL tunelu (aktualizowany automatycznie przez watcher)
+- `VITE_VPS_API_KEY` — ten sam co `VPS_API_KEY` w `.env` na VPS
+
+**Endpointy:**
+- `GET /health` — sprawdzenie czy serwer żyje
+- `POST /fetch-tweet` — pobiera tweet po URL, zapisuje do Firebase `posts`
+- `GET /accounts/x` — lista obserwowanych kont X
+- `POST /accounts/x/add` — dodaj konto X
+- `DELETE /accounts/x/remove` — usuń konto X
+- `GET /accounts/tg/{type}` — lista kanałów TG (type: signals|wpisy)
+- `POST /accounts/tg/add` — dodaj kanał TG
+- `DELETE /accounts/tg/remove` — usuń kanał TG
+
+**Zależności venv:**
+```bash
+pip install fastapi uvicorn python-dotenv firebase-admin python-telegram-bot==20.7 playwright requests
+playwright install chromium
+```
+
+---
+
+#### 2. MOD 1 — Linki ref w parafrazie AI
+
+**Lokalizacja:** tylko `main.js`, funkcja `triggerAIPara`.
+
+**Logika:**
+Po wygenerowaniu parafrazy przez AI — wyciąga domeny z `p.links` (rozwinięte URL), porównuje z domenami z kolekcji `refLinks`, jeśli dopasowanie — dołącza mój link ref pod parafrazą, jeśli brak — dołącza oryginalny link z domeną.
+
+```javascript
+const getDomain = url => { try { return new URL(url).hostname.replace('www.','') } catch { return '' } }
+```
+
+Format: `🔗 nazwa: url` — oddzielone `\n\n` od parafrazy, każdy link w osobnej linii.
+Całość zapisywana przez `updateDoc` (tak samo jak `savePara`).
+
+---
+
+#### 3. MOD 3 — Bot Telegram wykrywający linki X
+
+**Plik:** `/root/vps-api/link_bot.py`
+**Token:** `TG_LINK_BOT_TOKEN` z `.env` (można wziąć z `/root/xparafbot/.env` jako `TELEGRAM_BOT_TOKEN` — to ten sam bot)
+**Biblioteka:** `python-telegram-bot==20.7` (NIE Telethon — to normalny bot)
+
+Bot wykrywa wzorzec `twitter.com/status/` lub `x.com/status/` w wiadomościach, wywołuje `fetch_tweet.py` jako subprocess, odpowiada: `✅ Dodano wpis od @konto` lub `❌ Błąd: opis`.
+
+---
+
+#### 4. MOD 4 — Import z linku X w "Dodaj ręcznie"
+
+**Lokalizacja:** `main.js` — zakładka "Dodaj ręcznie", sekcja nad listą szkiców.
+**Funkcja:** `importFromX()` — eksponowana do `window`.
+
+Pobiera URL z input `#import-x-url`, wysyła POST do `/fetch-tweet` przez VPS-API, po sukcesie: toast + `renderMain()` + `updateBadges()`. Wpis trafia bezpośrednio do `posts` (nie do `manualDrafts`) bo `/fetch-tweet` sam zapisuje do Firebase.
+
+**Pomocnicze stałe (dodane do main.js):**
+```javascript
+const vpsHeaders = () => ({'Content-Type':'application/json','X-API-Key': import.meta.env.VITE_VPS_API_KEY || ''})
+const vpsUrl = path => (import.meta.env.VITE_VPS_URL || '') + path
+```
+
+---
+
+#### 5. MOD 5 — PWA
+
+**Pliki w repo (folder `/public/`):**
+- `manifest.json` — konfiguracja PWA (name, icons, theme_color: `#00e5ff`, background: `#484862`)
+- `sw.js` — Service Worker cache dla `/` i `/index.html`
+- `icon-192.png` i `icon-512.png` — ikony z napisem "XP" na tle `#484862`
+
+**W `index.html` (w `<head>`):**
+```html
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#00e5ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="XPost">
+<link rel="apple-touch-icon" href="/icon-192.png">
+```
+
+**W `main.js` (przed INIT):**
+```javascript
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(e => console.warn('SW:', e))
+  })
+}
+```
+
+---
+
+#### 6. MOD 8 — Zarządzanie kontami X i kanałami TG z poziomu aplikacji
+
+**W `main.js` (zakładka Ustawienia):**
+- Trzy nowe sekcje: "📋 Obserwowane konta X", "📢 Kanały TG — Sygnały", "📢 Kanały TG — Wpisy"
+- Funkcja `loadVpsAccounts()` — wywoływana automatycznie przy wejściu w Ustawienia
+- Stan: `vpsAccountsX`, `vpsTgSignals`, `vpsTgWpisy`
+- Funkcje: `vpsAddAccountX()`, `vpsRemoveAccountX(acc)`, `vpsAddTg(type)`, `vpsRemoveTg(type, ch)`
+- Sekcje widoczne tylko gdy `import.meta.env.VITE_VPS_URL` jest ustawiony; jeśli nie — info o konfiguracji
+
+**Na VPS:**
+- Serwer czyta/modyfikuje pliki txt i wywołuje `pm2 reload` po każdej zmianie
+- `observed_accounts.txt` — jedna nazwa per linia (bez @), linie `#` ignorowane
+- `tg_sygnaly.txt` — format `ID: słowo1, słowo2` lub samo ID
+- `tg_wpisy.txt` — jedna nazwa/ID per linia
+
+---
+
+#### 7. Tunnel Watcher — automatyczna aktualizacja URL w Vercel
+
+**Problem:** Cloudflare trycloudflare.com zmienia URL po każdym restarcie tunelu.
+
+**Rozwiązanie:** Skrypt `tunnel_watcher.py` co 5 minut:
+1. Czyta pliki logów PM2 bezpośrednio z dysku (`~/.pm2/logs/vps-api-tunnel-*.log`) — NIE przez `pm2 logs` (zawiesza się)
+2. Szuka wzorca `https://[a-z0-9-]+\.trycloudflare\.com` w ostatnich 8KB logów
+3. Pobiera aktualną wartość `VITE_VPS_URL` z Vercel API (GET `/v9/projects/{id}/env`)
+4. Jeśli URL się zmienił — aktualizuje przez PATCH `/v9/projects/{id}/env/{env_id}`
+5. Po aktualizacji triggeruje redeploy Vercel
+
+**Wymagane w `.env`:**
+```
+VERCEL_TOKEN=vcp_...         # Personal Account token z vercel.com/account/tokens
+VERCEL_PROJECT_ID=prj_...    # z Vercel → projekt → Settings → General
+VERCEL_TEAM_ID=              # puste dla personal account
+PM2_TUNNEL_NAME=vps-api-tunnel
+TUNNEL_CHECK_INTERVAL=300
+```
+
+**Ważne:** Token Vercel dla personal account zaczyna się od `vcp_` (nie `vercel_`).
+
+---
+
+#### 8. Optymalizacja Firebase — redukcja odczytów
+
+**Problem:** Aplikacja przekraczała 50K odczytów/dzień (limit darmowego planu Firestore), czasem dochodząc do 278K. Powód: polling TG co 2 minuty pobierał CAŁE kolekcje `tgSignals` i `tgWpisy`.
+
+**Rozwiązanie:**
+- Usunięto automatyczny polling TG całkowicie
+- TGBot sam zapisuje do Firestore — polling był zbędny
+- Dodano przycisk **🔄 Odśwież** w obu zakładkach TG (pobiera dane na żądanie)
+- Dodano przycisk **☑ Zaznacz widoczne** w obu zakładkach TG
+
+**Reset limitu Firebase:** codziennie o **09:00 czasu polskiego** (midnight Pacific Time = UTC-7 latem).
+
+---
+
+#### 9. Bulk select w zakładkach TG Sygnały i TG Wpisy
+
+Dodano funkcjonalność masowego odrzucania analogiczną do zakładki Wpisy:
+- Checkbox przy każdej karcie
+- Przycisk "☑ Zaznacz widoczne" — zaznacza wszystkie widoczne karty (po załadowaniu przez Odśwież)
+- Pasek bulk z "Odrzuć zaznaczone" i "✕ Odznacz"
+
+**WAŻNE — pułapka ES Modules:** Zmienne zdefiniowane w module ES6 (`tgSigSelected`, `tgWpiSelected`, `mainSelected`) NIE są dostępne bezpośrednio z atrybutów `onclick` w HTML. Tylko funkcje eksponowane przez `Object.assign(window, {...})` działają z onclick. Rozwiązanie: zawsze tworzyć funkcje-wrappery i eksponować je do `window`.
+
+**Wzorzec który działa:**
+```javascript
+// ŹLE — nie działa z onclick:
+onclick="tgSigSelected.clear()"
+
+// DOBRZE — wrapper eksponowany do window:
+function tgClearSig() { tgSigSelected.clear(); ... }
+Object.assign(window, { tgClearSig })
+// onclick="tgClearSig()"
+```
+
+**Wrappery dla TG bulk:**
+- `tgToggleSig(id, checked)` / `tgToggleWpi(id, checked)` — toggle jednej karty
+- `tgSelectAllSig()` / `tgSelectAllWpi()` — zaznacz wszystkie widoczne
+- `tgClearSig()` / `tgClearWpi()` — odznacz wszystkie
+- `tgRejectSig()` / `tgRejectWpi()` — odrzuć zaznaczone
+
+**Odrzucenie TG:** ustawia `status: 'Odrzucone'` — dokument POZOSTAJE w Firestore jako "strażnik" duplikatów. TGBot sprawdza `doc_exists()` przed zapisem — nie doda ponownie tego samego wpisu.
+
+---
+
+### PROBLEMY I ICH ROZWIĄZANIA
+
+#### Problem 1: `pm2 logs` zawiesza się w skryptach Python
+`subprocess.run(["pm2", "logs", ..., "--nostream"])` zawiesza się po 15s timeout.
+
+**Rozwiązanie:** Czytaj pliki logów PM2 bezpośrednio z dysku:
+```python
+log_path = Path.home() / ".pm2" / "logs" / f"{PM2_TUNNEL_NAME}-out.log"
+with open(log_path) as f:
+    f.seek(max(0, size - 8192))  # ostatnie 8KB
+    content = f.read()
+```
+
+#### Problem 2: Cookies z rozszerzenia przeglądarki — błąd `sameSite`
+`BrowserContext.add_cookies: cookies[0].sameSite: expected one of (Strict|Lax|None)`
+
+Cookies z EditThisCookie mają format rozszerzenia przeglądarki:
+- `sameSite: "unspecified"` zamiast wartości z `{Strict, Lax, None}`
+- `expirationDate` zamiast `expires`
+- Dodatkowe pola: `hostOnly`, `session`, `storeId`, `id`
+
+**Rozwiązanie:** Konwerter cookies w `fetch_tweet.py`:
+```python
+VALID_SAMESITE = {"Strict", "Lax", "None"}
+def convert_cookie(c):
+    out = {
+        'name': c.get('name',''), 'value': c.get('value',''),
+        'domain': c.get('domain',''), 'path': c.get('path','/'),
+        'httpOnly': bool(c.get('httpOnly',False)), 'secure': bool(c.get('secure',False)),
+    }
+    exp = c.get('expires') or c.get('expirationDate')
+    if exp and isinstance(exp,(int,float)) and exp>0:
+        out['expires'] = float(exp)
+    ss = c.get('sameSite','')
+    if ss in VALID_SAMESITE:
+        out['sameSite'] = ss
+    return out
+```
+
+#### Problem 3: `fetch_tweet.py` — błąd `No module named 'firebase_admin'`
+Serwer VPS-API wywołuje `fetch_tweet.py` przez Python z venv xparafbota (`/root/xparafbot/venv/bin/python3`), ale `firebase_admin` był zainstalowany tylko w venv `vps-api`.
+
+**Rozwiązanie:**
+```bash
+/root/xparafbot/venv/bin/pip install firebase-admin
+echo "firebase-admin" >> /root/xparafbot/requirements.txt
+```
+
+#### Problem 4: Vercel API token — format `vcp_` vs `vercel_`
+Nowe tokeny Personal Account Vercel zaczynają się od `vcp_`, nie `vercel_`. Oba formaty są prawidłowe.
+
+#### Problem 5: `VITE_VPS_URL` nie istniała w Vercel — watcher zwracał błąd
+Gdy zmienna nie istnieje w Vercel, API zwraca pustą listę `envs`. Skrypt zwracał błąd zamiast utworzyć zmienną.
+
+**Rozwiązanie:** Gdy `env_id` jest `None` — użyj POST zamiast PATCH (stwórz nową zmienną).
+
+#### Problem 6: Przycisk "Odznacz" nie odznaczał checkboxów wizualnie
+`mainSelected.clear()` czyściło Set ale `renderMain()` nie było wywoływane — checkboxy pozostawały zaznaczone w DOM.
+
+**Rozwiązanie:** Dodano funkcję `clearMainSelected()` eksponowaną do `window`:
+```javascript
+function clearMainSelected() {
+  mainSelected.clear()
+  updateMainBulkBar()
+  renderMain()
+}
+```
+
+#### Problem 7: Pusta strona po deployu — cache przeglądarki
+Po deployu Vite generuje nową nazwę pliku JS (hash w nazwie). Przeglądarka trzyma stary plik z poprzedniego buildu.
+
+**Rozwiązanie:** Hard refresh: `Ctrl+Shift+R` (Windows) / `Cmd+Shift+R` (Mac), lub DevTools → prawy klik na odśwież → "Empty Cache and Hard Reload".
+
+---
+
+### AKTUALNY STAN PM2 NA VPS
+
+```
+signal-bot          ← bot sygnałów (istniejący)
+kurator-server      ← serwer kuratora (NIE dotykać)
+market-regime       ← (istniejący)
+shadow-portfolio    ← (istniejący)
+channel-tester      ← (istniejący)
+vps-api             ← NOWY: FastAPI server port 3099
+vps-api-tunnel      ← NOWY: Cloudflare tunnel
+vps-link-bot        ← NOWY: Telegram link bot (MOD 3)
+vps-tunnel-watcher  ← NOWY: Auto-update URL w Vercel co 5 min
+```
+
+**Zasada deploy:** zawsze `pm2 reload` (NIE restart), deploy po 22:00 UTC.
+
+---
+
+### NOWE ZMIENNE ŚRODOWISKOWE
+
+**Vercel (VITE_*):**
+```
+VITE_VPS_URL=https://xxx.trycloudflare.com   ← aktualizowane automatycznie przez watcher
+VITE_VPS_API_KEY=577bb4ba9fdb4fb20dc6c4014f1093e3
+```
+
+**VPS `/root/vps-api/.env`:**
+```
+VPS_API_KEY=577bb4ba9fdb4fb20dc6c4014f1093e3
+TG_LINK_BOT_TOKEN=...     # ten sam co TELEGRAM_BOT_TOKEN w /root/xparafbot/.env
+FIREBASE_CREDENTIALS=/root/tgbot/firebase_service_key.json
+XPARAFBOT_DIR=/root/xparafbot
+VERCEL_TOKEN=vcp_...
+VERCEL_PROJECT_ID=prj_bvdAduHiBseeWEXn1ChjGGdXpOPi
+VERCEL_TEAM_ID=
+PM2_TUNNEL_NAME=vps-api-tunnel
+TUNNEL_CHECK_INTERVAL=300
+```
+
+---
+
+### DO ZROBIENIA W KOLEJNYCH SESJACH
+
+- [ ] **MOD 2** — Publikowanie na X przez API (wymaga API Key od X — `developer.x.com`, plan Pay-per-use: $0.01/tweet)
+- [ ] **MOD 6** — Słowa kluczowe: nowa kolekcja Firebase `keywords`, wyszukiwanie przez GraphQL SearchTimeline w `xparafbot.py`, sekcja w Ustawieniach
+- [ ] **MOD 7** — Pobieranie całych wątków: funkcja `is_thread()` + `fetch_full_thread()` w `xparafbot.py`
+- [ ] **Problem wpisów manualnych przy filtrze "Wszystkie konta"** — wpisy `manual_*` pojawiają się tylko po wybraniu konkretnego konta z listy; przy "Wszystkie konta" znikają (prawdopodobnie problem z formatem daty `xDate` lub porównaniem w filtrze — wymaga debugowania po odnowieniu limitu Firebase)
+- [ ] **Migracja na Firebase Blaze** — rozważyć plan pay-as-you-go (~$3-5/mies.) zamiast codziennego wyczerpywania limitu
+
+----
+----
+----
 
 ----
 
