@@ -1151,6 +1151,7 @@ function renderMain() {
         <button class="btn" id="bexp-${p.id}" onclick="toggleExpand('${p.id}')">Rozwiń</button>
         <button class="btn" onclick="copyText(document.getElementById('orig-${p.id}').innerText)">Kopiuj oryginał</button>
         <button class="btn btn-info" onclick="copyText(document.getElementById('para-${p.id}').value)">Kopiuj parafrazę</button>
+        <button class="btn" style="background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15);white-space:nowrap" onclick="copyAndOpenX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Kopiuj parafrazę i otwórz X">🐦 Publikuj na X</button>
         <button class="btn btn-success" onclick="addToProjects('${p.id}')" title="Dodaj do zakładki Projekty">🪂 Dodaj do Projektów</button>
         <button class="btn btn-danger ml-auto" onclick="setPostStatus('${p.id}','Odrzucone')">Odrzuć</button>
       </div>
@@ -1568,6 +1569,7 @@ function renderMoje() {
       </div>
       <div class="mypost-foot">
         <button class="btn" onclick="copyText(\`${p.text.replace(/`/g,"'").replace(/\\/g,'\\\\')}\`)">Kopiuj wpis</button>
+        <button class="btn" style="background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15);white-space:nowrap" onclick="copyAndOpenX(\`${p.text.replace(/`/g,"'").replace(/\\/g,'\\\\')}\`)" title="Kopiuj wpis i otwórz X">🐦 Publikuj na X</button>
         <button class="btn" onclick="startMyEdit('${p.id}')">Edytuj</button>
         ${p.status!=='Opublikowane'?`<button class="btn btn-success" onclick="publishMyPost('${p.id}')">Opublikowano</button>`:''}
         <button class="btn btn-danger ml-auto" onclick="deleteMyPost('${p.id}')">Usuń</button>
@@ -4801,10 +4803,23 @@ Object.assign(window, {
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
   checkGroqStatus, renderGroqStatusCard, resetGroqCounter,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
-  importFromX, refreshTgData,
+  importFromX, refreshTgData, copyAndOpenX,
   tgToggleSig, tgToggleWpi, tgSelectAllSig, tgSelectAllWpi, tgClearSig, tgClearWpi, tgRejectSig, tgRejectWpi,
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
 })
+
+// ── PUBLIKUJ NA X ────────────────────────────────────────────────
+function copyAndOpenX(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    toast('📋 Skopiowano! Wklejaj na X (Ctrl+V)')
+    setTimeout(() => window.open('https://x.com/compose/tweet', '_blank'), 400)
+  }).catch(() => {
+    // Fallback jeśli clipboard niedostępny
+    window.open('https://x.com/compose/tweet', '_blank')
+    toast('Otwarto X — wklej tekst ręcznie')
+  })
+}
+// ─────────────────────────────────────────────────────────────────
 
 // ── MOD 5: PWA — Service Worker ───────────────────────────────────
 if ('serviceWorker' in navigator) {
