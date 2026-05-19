@@ -614,6 +614,7 @@ let atSortCol = 'excelRow' // kolumna sortowania
 let atSortDir = 'desc'     // 'asc' | 'desc'
 let mainSelected = new Set() // zaznaczone posty w zakładce Wpisy
 let tgSigSelected = new Set() // zaznaczone sygnały TG
+let dailyTasks    = {} // zadania daily todo
 let tgWpiSelected = new Set() // zaznaczone wpisy TG
 
 // ── UTILS ─────────────────────────────────────────────────────────
@@ -763,7 +764,7 @@ async function loadAll() {
   posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}; aiTools = {}; manualDrafts = {}
   // TG dane — ładowane przy starcie z limitem tgAutoLoad (domyślnie 15)
   const tgLimit = tgAutoLoad || 15
-  const [ps, ms, rs, ns, ks, at, cfg, ait, md, tgs, tgw] = await Promise.all([
+  const [ps, ms, rs, ns, ks, at, cfg, ait, md, dt, tgs, tgw] = await Promise.all([
     getDocs(query(collection(db,'posts'),         orderBy('xDate','desc'))),
     getDocs(query(collection(db,'myPosts'),       orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
@@ -773,6 +774,7 @@ async function loadAll() {
     getDoc(doc(db,'airdropConfig','settings')),
     getDocs(query(collection(db,'aiTools'),       orderBy('addedAt','desc'))),
     getDocs(query(collection(db,'manualDrafts'),  orderBy('addedAt','desc'))),
+    getDocs(query(collection(db,'dailyTasks'),    orderBy('order','asc'))),
     getDocs(query(collection(db,'tgSignals'), orderBy('addedAt','desc'), limit(tgLimit))),
     getDocs(query(collection(db,'tgWpisy'),   orderBy('addedAt','desc'), limit(tgLimit))),
   ])
@@ -780,6 +782,7 @@ async function loadAll() {
   ms.forEach(d  => { myPosts[d.id]       = d.data() })
   rs.forEach(d  => { refLinks[d.id]      = d.data() })
   ns.forEach(d  => { notes[d.id]         = d.data() })
+  dt.forEach(d  => { dailyTasks[d.id]    = d.data() })
   tgs.forEach(d => { tgSignals[d.id]     = d.data() })
   tgw.forEach(d => { tgWpisy[d.id]       = d.data() })
   ks.forEach(d  => { konta[d.id]         = d.data() })
@@ -849,7 +852,7 @@ function switchTab(name) {
   const pageEl = document.getElementById(`page-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools}
+  const fn = {main:renderMain, moje:renderMoje, todo:renderTodo, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools}
   if (fn[name]) fn[name]()
   // Wiecej — renderuj aktywną podzakładkę
   if (name === 'wiecej') {
@@ -1157,6 +1160,7 @@ function renderMain() {
         <button class="btn btn-info" onclick="copyText(document.getElementById('para-${p.id}').value)">Kopiuj parafrazę</button>
         <button class="btn" style="background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15);white-space:nowrap" onclick="copyAndOpenX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Kopiuj parafrazę i otwórz X">🐦 Publikuj na X</button>
         <button class="btn btn-success" onclick="addToProjects('${p.id}')" title="Dodaj do zakładki Projekty">🪂 Dodaj do Projektów</button>
+        <button class="btn" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#10b981;white-space:nowrap" onclick="openTodoFromPost('${p.id}')">📋 Dodaj do TODO</button>
         <button class="btn btn-danger ml-auto" onclick="setPostStatus('${p.id}','Odrzucone')">Odrzuć</button>
       </div>
     </div>`
@@ -3871,6 +3875,7 @@ function buildApp() {
     <div class="tabs">
       <button class="tab active" data-tab="main"    onclick="switchTab('main')">Wpisy <span class="tab-badge" id="tab-main-badge">0</span></button>
       <button class="tab"        data-tab="moje"    onclick="switchTab('moje')">Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
+      <button class="tab"        data-tab="todo"    onclick="switchTab('todo')">📋 Daily TODO <span class="tab-badge" id="tab-todo-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
       <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
       <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
       <button class="tab"        data-tab="konta"   onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
@@ -4015,6 +4020,8 @@ function buildApp() {
     </div>
 
     <!-- MOJE WPISY -->
+    <div id="page-todo" class="page"></div>
+
     <div id="page-moje" class="page">
       <div class="section-header">
         <span style="font-size:13px;color:var(--text2)">Twoje własne wpisy na X</span>
@@ -4845,6 +4852,7 @@ Object.assign(window, {
   checkGroqStatus, renderGroqStatusCard, resetGroqCounter,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
   importFromX, refreshTgData, copyAndOpenX, saveTgAutoLoad,
+  renderTodo, toggleTodoCheck, openTodoForm, addTodoLinkRow, removeTodoLinkRow, closeTodoForm, saveTodoTask, deleteTodoTask, openTodoFromPost, saveTodoFromModal,
   tgToggleSig, tgToggleWpi, tgSelectAllSig, tgSelectAllWpi, tgClearSig, tgClearWpi, tgRejectSig, tgRejectWpi,
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
 })
@@ -4861,6 +4869,319 @@ function copyAndOpenX(text) {
   })
 }
 // ─────────────────────────────────────────────────────────────────
+
+// ── DAILY TODO ───────────────────────────────────────────────────
+
+// Reset o 01:00 UTC (= 02:00 czasu polskiego letniego / 01:00 zimowego)
+function shouldResetToday() {
+  const now = new Date()
+  const utcH = now.getUTCHours()
+  const utcDate = now.toISOString().slice(0, 10)
+  // Godzina resetu: 01:00 UTC
+  const resetHour = 1
+  // Klucz dnia = data UTC gdy minęła godzina resetu
+  const resetDate = utcH >= resetHour ? utcDate : new Date(now - 86400000).toISOString().slice(0, 10)
+  const lastReset = localStorage.getItem('todoLastReset') || ''
+  if (lastReset !== resetDate) {
+    localStorage.setItem('todoLastReset', resetDate)
+    return true
+  }
+  return false
+}
+
+async function checkAndResetTodo() {
+  if (!shouldResetToday()) return
+  // Reset wszystkich checkedAt
+  const batch = []
+  for (const [id, task] of Object.entries(dailyTasks)) {
+    if (task.checkedAt) {
+      task.checkedAt = null
+      batch.push(updateDoc(doc(db, 'dailyTasks', id), { checkedAt: null }))
+    }
+  }
+  if (batch.length) {
+    await Promise.all(batch)
+    toast('🌅 Nowy dzień — zadania Daily TODO zresetowane!')
+  }
+}
+
+function renderTodo() {
+  const el = document.getElementById('page-todo')
+  if (!el) return
+
+  // Sprawdź reset
+  checkAndResetTodo()
+
+  const tasks = Object.entries(dailyTasks)
+    .map(([id, t]) => ({...t, id}))
+    .sort((a, b) => {
+      // Zaznaczone na dół, reszta wg kolejności
+      const aD = a.checkedAt ? 1 : 0
+      const bD = b.checkedAt ? 1 : 0
+      if (aD !== bD) return aD - bD
+      return (a.order || 0) - (b.order || 0)
+    })
+
+  const done = tasks.filter(t => t.checkedAt).length
+  const total = tasks.length
+
+  el.innerHTML = `
+    <div class="section-header">
+      <span style="font-size:13px;color:var(--text2)">Codzienne zadania — reset o 02:00 (czas letni) / 01:00 (czas zimowy)</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:12px;color:var(--text3)">${done}/${total} zrobione</span>
+        <button class="btn-add" onclick="openTodoForm()">+ Nowe zadanie</button>
+      </div>
+    </div>
+
+    <div id="todo-form-wrap" style="display:none"></div>
+
+    ${!tasks.length ? `
+      <div class="empty" style="padding:40px;text-align:center">
+        <div style="font-size:32px;margin-bottom:12px">📋</div>
+        <div style="color:var(--text2);margin-bottom:16px">Brak zadań Daily TODO</div>
+        <button class="btn btn-primary" onclick="openTodoForm()">+ Dodaj pierwsze zadanie</button>
+      </div>
+    ` : `
+      <div id="todo-cards" style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+        ${tasks.map(t => renderTodoCard(t)).join('')}
+      </div>
+    `}
+
+    <!-- Modal dodawania z Wpisów -->
+    <div id="todo-modal-wrap"></div>
+  `
+}
+
+function renderTodoCard(t) {
+  const done = !!t.checkedAt
+  const links = t.links || []
+  return `
+    <div class="card" id="todo-card-${t.id}" style="${done ? 'opacity:0.45;' : ''}">
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 16px">
+        <input type="checkbox" ${done ? 'checked' : ''}
+          style="width:20px;height:20px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0"
+          onchange="toggleTodoCheck('${t.id}', this.checked)">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:14px;color:var(--text);${done ? 'text-decoration:line-through;' : ''}">${t.name}</div>
+          ${links.length ? `
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+              ${links.map((l, i) => `
+                <a href="${l.url}" target="_blank" rel="noopener"
+                  style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.2);color:var(--neon);font-size:12px;text-decoration:none;white-space:nowrap"
+                  title="${l.url}">
+                  🔗 ${l.label || l.url}
+                </a>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn" style="padding:4px 10px;font-size:11px" onclick="openTodoForm('${t.id}')">✏️</button>
+          <button class="btn btn-danger" style="padding:4px 10px;font-size:11px" onclick="deleteTodoTask('${t.id}')">✕</button>
+        </div>
+      </div>
+    </div>
+  `
+}
+
+async function toggleTodoCheck(id, checked) {
+  const now = checked ? new Date().toISOString() : null
+  dailyTasks[id].checkedAt = now
+  await updateDoc(doc(db, 'dailyTasks', id), { checkedAt: now })
+  renderTodo()
+  updateTodoBadge()
+}
+
+function updateTodoBadge() {
+  const total = Object.keys(dailyTasks).length
+  const done  = Object.values(dailyTasks).filter(t => t.checkedAt).length
+  const remaining = total - done
+  const badge = document.getElementById('tab-todo-badge')
+  if (badge) {
+    badge.textContent = remaining
+    badge.style.display = remaining > 0 ? '' : 'none'
+  }
+}
+
+function openTodoForm(editId = null) {
+  const wrap = document.getElementById('todo-form-wrap')
+  if (!wrap) return
+  const task = editId ? dailyTasks[editId] : null
+  const links = task?.links || [{ label: '', url: '' }]
+  const isEdit = !!editId
+
+  wrap.style.display = 'block'
+  wrap.innerHTML = `
+    <div class="form-card" style="margin-bottom:16px">
+      <div class="form-title">${isEdit ? '✏️ Edytuj zadanie' : '+ Nowe zadanie Daily TODO'}</div>
+      <div class="form-row full" style="margin-bottom:12px">
+        <div class="form-label">Nazwa projektu / zadania</div>
+        <input class="form-input" id="todo-name" value="${task?.name || ''}" placeholder="np. Netrun Testnet">
+      </div>
+      <div class="form-label" style="margin-bottom:6px">Linki</div>
+      <div id="todo-links-list" style="display:flex;flex-direction:column;gap:8px">
+        ${links.map((l, i) => renderTodoLinkRow(i, l.label, l.url)).join('')}
+      </div>
+      <button class="btn" style="margin-top:8px;font-size:12px" onclick="addTodoLinkRow()">+ Dodaj link</button>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-primary" onclick="saveTodoTask(${editId ? `'${editId}'` : 'null'})">${isEdit ? 'Zapisz zmiany' : 'Dodaj zadanie'}</button>
+        <button class="btn" onclick="closeTodoForm()">Anuluj</button>
+      </div>
+    </div>
+  `
+  document.getElementById('todo-name')?.focus()
+}
+
+function renderTodoLinkRow(i, label = '', url = '') {
+  return `
+    <div class="form-row" id="todo-link-row-${i}" style="display:flex;gap:6px;align-items:center">
+      <input class="form-input" style="width:140px;flex-shrink:0" placeholder="Etykieta (np. App)"
+        id="todo-link-label-${i}" value="${label.replace(/"/g,'&quot;')}">
+      <input class="form-input" style="flex:1" placeholder="https://..."
+        id="todo-link-url-${i}" value="${url.replace(/"/g,'&quot;')}">
+      <button class="btn btn-danger" style="padding:4px 10px;font-size:11px;flex-shrink:0"
+        onclick="removeTodoLinkRow(${i})">✕</button>
+    </div>
+  `
+}
+
+let _todoLinkCount = 1
+function addTodoLinkRow() {
+  const list = document.getElementById('todo-links-list')
+  if (!list) return
+  const i = Date.now()
+  const div = document.createElement('div')
+  div.innerHTML = renderTodoLinkRow(i)
+  list.appendChild(div.firstElementChild)
+}
+
+function removeTodoLinkRow(i) {
+  document.getElementById(`todo-link-row-${i}`)?.remove()
+}
+
+function closeTodoForm() {
+  const wrap = document.getElementById('todo-form-wrap')
+  if (wrap) { wrap.style.display = 'none'; wrap.innerHTML = '' }
+}
+
+async function saveTodoTask(editId) {
+  const name = document.getElementById('todo-name')?.value.trim()
+  if (!name) { toast('Podaj nazwę zadania'); return }
+
+  // Zbierz linki
+  const rows = document.querySelectorAll('#todo-links-list > div[id^="todo-link-row-"]')
+  const links = []
+  rows.forEach(row => {
+    const id = row.id.replace('todo-link-row-', '')
+    const label = document.getElementById(`todo-link-label-${id}`)?.value.trim() || ''
+    const url   = document.getElementById(`todo-link-url-${id}`)?.value.trim()   || ''
+    if (url) links.push({ label: label || new URL(url).hostname.replace('www.',''), url })
+  })
+
+  const now = nowStr()
+  if (editId) {
+    // Edycja
+    const upd = { name, links, updatedAt: now }
+    dailyTasks[editId] = { ...dailyTasks[editId], ...upd }
+    await updateDoc(doc(db, 'dailyTasks', editId), upd)
+    toast('✅ Zadanie zaktualizowane')
+  } else {
+    // Nowe
+    const id = 'todo_' + Date.now()
+    const order = Object.keys(dailyTasks).length
+    const task = { id, name, links, order, checkedAt: null, addedAt: now }
+    dailyTasks[id] = task
+    await setDoc(doc(db, 'dailyTasks', id), task)
+    toast('✅ Zadanie dodane')
+  }
+
+  closeTodoForm()
+  renderTodo()
+  updateTodoBadge()
+}
+
+async function deleteTodoTask(id) {
+  if (!confirm(`Usunąć zadanie "${dailyTasks[id]?.name}"?`)) return
+  delete dailyTasks[id]
+  await deleteDoc(doc(db, 'dailyTasks', id))
+  renderTodo()
+  updateTodoBadge()
+  toast('Zadanie usunięte')
+}
+
+// Modal dodawania z zakładki Wpisy
+function openTodoFromPost(postId) {
+  const p = posts[postId]
+  if (!p) return
+
+  // Użyj rozwinietych linków z p.links
+  const links = (p.links || []).map(url => {
+    try {
+      const domain = new URL(url).hostname.replace('www.','')
+      return { label: domain, url, selected: true }
+    } catch { return { label: url, url, selected: true } }
+  })
+
+  // Pokaż modal
+  const wrap = document.getElementById('todo-modal-wrap') || document.body
+  const modalId = 'todo-post-modal'
+  let existing = document.getElementById(modalId)
+  if (existing) existing.remove()
+
+  const modal = document.createElement('div')
+  modal.id = modalId
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px'
+  modal.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:24px;width:100%;max-width:520px;max-height:80vh;overflow-y:auto">
+      <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:16px">📋 Dodaj do Daily TODO</div>
+      <div class="form-label" style="margin-bottom:6px">Nazwa projektu</div>
+      <input class="form-input" id="todo-modal-name" value="${p.account || ''}" style="margin-bottom:14px" placeholder="Nazwa zadania">
+      <div class="form-label" style="margin-bottom:8px">Linki (odznacz które chcesz pominąć)</div>
+      <div id="todo-modal-links" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+        ${links.length ? links.map((l, i) => `
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="checkbox" id="todo-ml-chk-${i}" checked
+              style="width:16px;height:16px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0">
+            <input class="form-input" id="todo-ml-label-${i}" value="${l.label}" style="width:130px;flex-shrink:0" placeholder="Etykieta">
+            <input class="form-input" id="todo-ml-url-${i}" value="${l.url}" style="flex:1;font-size:11px" placeholder="URL">
+          </div>
+        `).join('') : '<div style="color:var(--text3);font-size:12px">Brak rozwinietych linków w tym wpisie</div>'}
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="saveTodoFromModal(${links.length})">✅ Dodaj do TODO</button>
+        <button class="btn" onclick="document.getElementById('${modalId}').remove()">Anuluj</button>
+      </div>
+    </div>
+  `
+  document.body.appendChild(modal)
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove() })
+}
+
+async function saveTodoFromModal(linkCount) {
+  const name = document.getElementById('todo-modal-name')?.value.trim()
+  if (!name) { toast('Podaj nazwę zadania'); return }
+
+  const links = []
+  for (let i = 0; i < linkCount; i++) {
+    const chk   = document.getElementById(`todo-ml-chk-${i}`)
+    const label = document.getElementById(`todo-ml-label-${i}`)?.value.trim()
+    const url   = document.getElementById(`todo-ml-url-${i}`)?.value.trim()
+    if (chk?.checked && url) links.push({ label: label || url, url })
+  }
+
+  const id    = 'todo_' + Date.now()
+  const order = Object.keys(dailyTasks).length
+  const task  = { id, name, links, order, checkedAt: null, addedAt: nowStr() }
+  dailyTasks[id] = task
+  await setDoc(doc(db, 'dailyTasks', id), task)
+
+  document.getElementById('todo-post-modal')?.remove()
+  toast('✅ Dodano do Daily TODO!')
+  updateTodoBadge()
+}
+
+// ── KONIEC: DAILY TODO ────────────────────────────────────────────
 
 // ── MOD 5: PWA — Service Worker ───────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -4882,7 +5203,7 @@ onAuthStateChanged(auth, async user => {
     await loadAll()
     await loadEmojis()
     renderEmojiPanel()
-    renderMain(); renderMoje(); renderNotes(); renderRef(); renderKonta(); renderAirdrop(); renderAiTools(); renderManualDrafts()
+    renderMain(); renderMoje(); renderTodo(); renderNotes(); renderRef(); renderKonta(); renderAirdrop(); renderAiTools(); renderManualDrafts()
     updateStats(); updateBadges()
     await syncSheets()
     setInterval(syncSheets, 5 * 60 * 1000)
