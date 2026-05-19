@@ -4872,10 +4872,13 @@ if ('serviceWorker' in navigator) {
 // ── INIT ──────────────────────────────────────────────────────────
 buildApp()
 
+let _appInitialized = false
 onAuthStateChanged(auth, async user => {
   window._currentUser = user || null
   if (user) {
     showMainApp(user)
+    if (_appInitialized) return  // zapobiega wielokrotnemu loadAll przy odnowieniu tokenu
+    _appInitialized = true
     await loadAll()
     await loadEmojis()
     renderEmojiPanel()
@@ -4886,6 +4889,7 @@ onAuthStateChanged(auth, async user => {
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
+    _appInitialized = false
     showAuthScreen()
   }
 })
