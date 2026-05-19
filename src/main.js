@@ -5205,8 +5205,8 @@ onAuthStateChanged(auth, async user => {
     renderEmojiPanel()
     renderMain(); renderMoje(); renderTodo(); renderNotes(); renderRef(); renderKonta(); renderAirdrop(); renderAiTools(); renderManualDrafts()
     updateStats(); updateBadges()
-    await syncSheets()
-    setInterval(syncSheets, 5 * 60 * 1000)
+    //await syncSheets()
+    //setInterval(syncSheets, 5 * 60 * 1000)
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
