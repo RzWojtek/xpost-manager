@@ -1,7 +1,7 @@
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
 import {
-  collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, where, limit, onSnapshot, getCountFromServer
+  collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, where, limit, onSnapshot
 } from 'firebase/firestore'
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
 
@@ -765,7 +765,7 @@ async function loadAll() {
   // TG dane — ładowane przy starcie z limitem tgAutoLoad (domyślnie 15)
   const tgLimit = tgAutoLoad || 15
   const [ps, ms, rs, ns, ks, at, cfg, ait, md, dt, tgs, tgw] = await Promise.all([
-    getDocs(query(collection(db,'posts'), where('status','!=','Odrzucone'), orderBy('status'), orderBy('xDate','desc'))),
+    getDocs(query(collection(db,'posts'),         orderBy('xDate','desc'))),
     getDocs(query(collection(db,'myPosts'),       orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
     getDocs(query(collection(db,'notes'),         orderBy('created','desc'))),
@@ -3241,7 +3241,7 @@ async function saveAtTypes() {
 }
 
 // ── STATYSTYKI ────────────────────────────────────────────────────
-async function renderStats() {
+function renderStats() {
   const el = document.getElementById('stats-content')
   if (!el) return
 
@@ -3250,13 +3250,7 @@ async function renderStats() {
   const activePosts = allPosts.filter(p => p.status !== 'Odrzucone' && p.status !== 'Opublikowane')
   const newPosts    = allPosts.filter(p => p.status === 'Nowy')
   const published   = allPosts.filter(p => p.status === 'Opublikowane')
-  // Odrzucone nie są ładowane przy starcie — pobieramy tylko liczbę przez COUNT (1 odczyt)
-  let rejectedCount = 0
-  try {
-    const snap = await getCountFromServer(query(collection(db,'posts'), where('status','==','Odrzucone')))
-    rejectedCount = snap.data().count
-  } catch(e) { console.warn('rejectedCount:', e) }
-  const rejected = { length: rejectedCount }
+  const rejected    = allPosts.filter(p => p.status === 'Odrzucone')
 
   // Top konta wg liczby aktywnych wpisów
   const accountCounts = {}
