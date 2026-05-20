@@ -1,3 +1,14 @@
+// ============================================================
+// XPost Manager — main.js
+// Wersja:          v2.15
+// Data:            2026-05-19
+// Zmiany:          VPS-API, Daily TODO, PWA, MOD1-8,
+//                  _appInitialized (blokada wielokrotnego loadAll),
+//                  bulk select TG, refreshTgData, copyAndOpenX,
+//                  tgAutoLoad z Firebase, naprawa dat ISO
+// Poprzednia:      v2.14 (przed firebase-opt — bezpieczny backup)
+// Git tag:         v2.15
+// ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
 import {
@@ -5205,8 +5216,8 @@ onAuthStateChanged(auth, async user => {
     renderEmojiPanel()
     renderMain(); renderMoje(); renderTodo(); renderNotes(); renderRef(); renderKonta(); renderAirdrop(); renderAiTools(); renderManualDrafts()
     updateStats(); updateBadges()
-    //await syncSheets()
-    //setInterval(syncSheets, 5 * 60 * 1000)
+    await syncSheets()
+    setInterval(syncSheets, 5 * 60 * 1000)
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
