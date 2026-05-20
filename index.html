@@ -10,9 +10,41 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="XPost">
   <link rel="apple-touch-icon" href="/icon-192.png">
+  <style>
+    #scrollTopBtn {
+      display: none;
+      position: fixed;
+      bottom: 28px;
+      right: 20px;
+      z-index: 9999;
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      border: 2px solid #00e5ff;
+      background: #484862;
+      color: #00e5ff;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(0,229,255,0.4);
+      transition: opacity 0.3s, box-shadow 0.3s;
+      opacity: 0.85;
+    }
+    #scrollTopBtn:hover {
+      opacity: 1;
+      box-shadow: 0 0 18px rgba(0,229,255,0.75);
+    }
+  </style>
 </head>
 <body>
   <div id="app"></div>
+  <button id="scrollTopBtn" title="Wróć na górę" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
   <script type="module" src="/src/main.js"></script>
+  <script>
+    window.addEventListener('scroll', function () {
+      document.getElementById('scrollTopBtn').style.display =
+        window.scrollY > 300 ? 'block' : 'none';
+    });
+  </script>
 </body>
 </html>
