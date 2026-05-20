@@ -1583,7 +1583,42 @@ for d in docs:
 Wszystkie daty zapisywane do Firebase muszą być w formacie ISO: `YYYY-MM-DD HH:MM:SS`. Dotyczy pól `xDate`, `addedAt`, `archivedAt`. Format PL (`DD.MM.YYYY`) jest używany tylko do wyświetlania w UI, nigdy do zapisu.
 
 ----
+----
 
+## SESJA: fetch_tweet.py + scroll-to-top (20 Maj 2026)
+
+### Zmiana 1: fetch_tweet.py — obsługa skróconych linków z telefonu
+
+**Problem:** Linki kopiowane z telefonu w formacie `https://x.com/i/status/ID`
+nie były pobierane — skrypt traktował `i` jako nazwę użytkownika.
+
+**Plik:** `/root/vps-api/fetch_tweet.py`
+
+**Zmiany (3 miejsca):**
+
+1. `fetch_single_tweet` — gdy `username == "i"`, ustawia `_unknown_` zamiast
+   używać `i` jako nazwy konta
+2. `fetch_via_tweetdetail` — nawigacja Playwright używa `x.com/i/status/ID`
+   gdy username to `_unknown_`, zamiast `x.com/i/status/ID`
+3. `fetch_via_tweetdetail` — prawdziwy username pobierany z TweetDetail:
+   `core.user_results.result.legacy.screen_name`
+
+**Brak wpływu na main.js, Firebase, zakładkę Wpisy.**
+
+---
+
+### Zmiana 2: index.html — pływający przycisk "Wróć na górę"
+
+**Problem:** Przy dużej liczbie wpisów trzeba było ręcznie przewijać do góry.
+
+**Plik:** `index.html` (główny katalog projektu)
+
+**Co dodano (tylko w index.html, main.js nienaruszony):**
+- Przycisk `#scrollTopBtn` — okrągły, neonowy (`#00e5ff` / `#484862`),
+  lewy dolny róg (`left: 20px, bottom: 28px`), `z-index: 9999`
+- Pojawia się dopiero po przewinięciu > 300px w dół
+- Klik → `window.scrollTo({top:0, behavior:'smooth'})`
+- Umieszczony w lewym dolnym rogu (prawym nachodził na przycisk emoji)
 ----
 ----
 
