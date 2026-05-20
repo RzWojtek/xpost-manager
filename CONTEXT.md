@@ -2,6 +2,420 @@
 > Plik kontekstowy dla kolejnych sesji AI. Ostatnia aktualizacja: Maj 2026.
 
 ---
+----
+
+## ⚠️ GLOBALNE ZASADY BEZPIECZEŃSTWA — CZYTAJ PRZED KAŻDĄ ZMIANĄ
+
+### NAJWAŻNIEJSZA ZAKŁADKA — "Wpisy"
+Zakładka "Wpisy" jest najważniejszą częścią aplikacji XPost Manager.
+Wszelkie zmiany w main.js muszą być weryfikowane pod kątem wpływu
+na tę zakładkę. Po każdej zmianie w main.js Claude sprawdza czy
+następujące elementy są nienaruszone:
+PARA_PROMPT, card-body, col-orig, col-para, orig-text, para-area,
+card-note, note-inline, bexp, triggerAIPara, card-foot, linksH,
+imgsH, refLinksHtml
+
+### PARA_PROMPT — ABSOLUTNY ZAKAZ MODYFIKACJI
+PARA_PROMPT (prompt do generowania parafrazy AI) działa perfekcyjnie
+i nie może być w żaden sposób modyfikowany, skracany ani zmieniany
+— chyba że użytkownik wyraźnie o to poprosi.
+
+### ŚWIĘTE PLIKI — NIE MODYFIKOWAĆ bez wyraźnego polecenia
+- `tgbot.py` — NIE MODYFIKOWAĆ (osobny projekt)
+- `xparafbot.py` — tylko na wyraźne polecenie użytkownika
+- Zakładka "Wpisy" w main.js — weryfikować diff po każdej zmianie
+
+### PRZED KAŻDĄ ZMIANĄ — OBOWIĄZKOWE PYTANIA
+
+Claude musi odpowiedzieć na każde pytanie ZANIM napisze kod:
+
+1. Czy ta zmiana może wpłynąć na zakładkę "Wpisy"?
+2. Czy ta zmiana może wpłynąć na dane w Firebase (duplikaty/utrata)?
+3. Czy ta zmiana wpływa na funkcje które ładują lub zapisują dane?
+4. Co się stanie jeśli jakaś zmienna będzie pusta lub niekompletna?
+5. Czy istnieje ryzyko że funkcja wywoła się wielokrotnie?
+
+Jeśli odpowiedź na którekolwiek pytanie brzmi TAK lub NIE WIEM
+— Claude zatrzymuje się, wyjaśnia ryzyko i czeka na decyzję
+użytkownika zanim napisze jakikolwiek kod.
+
+### KRYTYCZNA ZASADA — syncSheets i posts
+syncSheets() sprawdza duplikaty przez `if (!id || posts[id]) continue`.
+posts MUSI zawierać wpisy ze statusem Odrzucone w pamięci — inaczej
+syncSheets potraktuje je jako nowe i doda ponownie (tysiące duplikatów!).
+
+NIGDY nie dodawaj where('status','!=','Odrzucone') do query posts w loadAll.
+NIGDY nie limituj kolekcji posts bez upewnienia się że syncSheets nadal
+widzi Odrzucone w pamięci.
+
+### ZASADA PODGLĄDU PRZED MODYFIKACJĄ DANYCH
+Każdy skrypt który modyfikuje dane w Firebase lub na VPS musi:
+1. Najpierw pokazać CO zostanie zmienione (tryb podglądu)
+2. Pokazać liczbę rekordów których dotyczy zmiana
+3. Pokazać przykłady pierwszych i ostatnich rekordów
+4. Czekać na wyraźne potwierdzenie użytkownika ("tak")
+Nigdy nie modyfikuj danych bez pełnego podglądu i potwierdzenia.
+
+### SKRYPTY VPS KOSZTUJĄ READS
+Każdy skrypt Python który wywołuje `.stream()` na kolekcji posts
+pobiera WSZYSTKIE dokumenty = ~3872+ odczytów Firebase za jednym razem.
+Używaj skryptów diagnostycznych oszczędnie — tylko gdy konieczne.
+Preferuj COUNT zamiast stream() gdy potrzebujesz tylko liczby.
+
+### ZASADA JEDNEJ ZMIANY NA SESJĘ
+Jedna sesja = jedna funkcjonalność lub jedna poprawka.
+Nie łączyć wielu zmian w jednej sesji — każda zmiana
+testowana i potwierdzona przed przejściem do następnej.
+
+### BACKUP PRZED KAŻDĄ SESJĄ Z MODYFIKACJAMI
+Przed wprowadzeniem jakichkolwiek zmian Claude przypomina o:
+- Wykonaniu Git tag/release na GitHubie
+- Zrobieniu screenshota aktualnego stanu aplikacji (liczba Nowych wpisów)
+- Lokalnym backupie modyfikowanych plików
+
+### ZASADA OSTROŻNOŚCI
+Jeśli coś działa poprawnie — nie naprawiaj tego bez wyraźnej
+potrzeby. Każda optymalizacja musi być poprzedzona pełną analizą
+skutków ubocznych dla wszystkich funkcji które używają
+modyfikowanych danych.
+
+### KOMUNIKACJA Z UŻYTKOWNIKIEM
+Claude zawsze informuje użytkownika o:
+- Potencjalnych ryzykach przed wprowadzeniem zmiany
+- Tym co dokładnie zostanie zmienione i dlaczego
+- Możliwych skutkach ubocznych dla innych funkcji
+Użytkownik nie jest programistą — wyjaśnienia muszą być
+zrozumiałe i uczciwe, bez ukrywania ryzyka.
+
+### JEŚLI COŚ PÓJDZIE NIE TAK — PLAN AWARYJNY
+1. Natychmiast zakomentuj syncSheets w main.js (2 linie)
+2. Poczekaj na deploy Vercel
+3. NIE odświeżaj aplikacji
+4. Dopiero potem naprawiaj skryptami
+5. Duplikaty oznaczaj jako Odrzucone (NIE usuwaj) — chronią przed ponownym dodaniem
+
+----
+
+## WERSJONOWANIE main.js
+
+### Aktualna wersja
+main.js: v2.15 (2026-05-20)
+Git tag: v2.15
+Zmiany: VPS-API, Daily TODO, PWA, MOD1-8, _appInitialized,
+        bulk TG, refreshTgData, copyAndOpenX, tgAutoLoad,
+        naprawa dat ISO, sw.js przywrócony do prostej wersji
+
+### Historia wersji
+- v2.15 — 2026-05-20 — wszystkie MOD + _appInitialized (stabilna)
+- v2.14 — przed firebase-opt (NIE używać — powoduje duplikaty)
+- v2.0  — backup-przed-modami (najstarszy bezpieczny backup)
+
+### Format komentarza wersji w main.js (na początku pliku)
+```javascript
+// ============================================================
+// XPost Manager — main.js
+// Wersja:          v2.XX
+// Data:            YYYY-MM-DD
+// Zmiany:          krótki opis
+// Poprzednia:      v2.XX (opis)
+// Git tag:         v2.XX
+// ============================================================
+```
+
+### Zasady wersjonowania
+- Claude dodaje komentarz wersji na początku każdego nowego main.js
+- Numer wersji rośnie o 1 przy każdej sesji z modyfikacjami
+- Po wgraniu na GitHub → zrób Git tag z tym samym numerem
+- Aktualizuj sekcję "Aktualna wersja" w CONTEXT.md
+- Przy problemie: sprawdź komentarz w pliku → wróć do poprzedniego tagu
+
+### Jak wrócić do poprzedniej wersji
+GitHub → repo → Tags → wybierz tag → pobierz ZIP →
+wyciągnij src/main.js → wgraj przez GitHub Web UI → commit
+
+----
+
+## SESJA: Katastrofa Firebase + Naprawa (19-20 Maj 2026)
+
+### CO SIĘ STAŁO — CHRONOLOGIA
+
+#### Błąd który spowodował chaos
+Próba optymalizacji Firebase przez zmianę query posts w loadAll:
+```javascript
+// BŁĘDNA ZMIANA — NIE UŻYWAĆ NIGDY:
+getDocs(query(collection(db,'posts'), where('status','!=','Odrzucone'), ...))
+```
+
+#### Skutki
+1. `posts` w pamięci nie zawierało Odrzuconych (3498 dokumentów)
+2. syncSheets sprawdził `if (posts[id]) continue` — nie znalazł Odrzuconych
+3. Potraktował 3498 starych wpisów jako nowe → dodał je ponownie do Firebase
+4. Trzykrotnie powtórzył się ten scenariusz (łącznie ~9000 duplikatów)
+5. Firebase quota wyczerpana trzy razy w ciągu jednego dnia
+
+#### Jak naprawiono duplikaty
+Skrypt oznaczający duplikaty jako Odrzucone (NIE usuwał — ważne!):
+```bash
+cd /root/vps-api && source venv/bin/activate
+python3 -c "
+import firebase_admin
+from firebase_admin import credentials, firestore
+cred = credentials.Certificate('/root/tgbot/firebase_service_key.json')
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+# KROK 1: Najpierw podgląd — sprawdź które minuty mają duplikaty
+docs = db.collection('posts').stream()
+from collections import Counter
+minutes = Counter()
+for d in docs:
+    added = d.to_dict().get('addedAt','')
+    if '19.05.2026' in added or '20.05.2026' in added:
+        minutes[added[:16]] += 1
+for m,c in sorted(minutes.items()):
+    print(f'{m}: {c}')
+
+# KROK 2: Oznacz duplikaty (minuty z masowym dodaniem)
+# Zmień daty na te które pokazał KROK 1
+bad_minutes = ['19.05.2026 10:08','19.05.2026 10:09','19.05.2026 10:10','19.05.2026 10:11']
+to_fix = [d.id for d in db.collection('posts').stream()
+          if d.to_dict().get('addedAt','')[:16] in bad_minutes]
+print(f'Do oznaczenia: {len(to_fix)}')
+
+# KROK 3: Oznacz jako Odrzucone (batch po 500)
+batch = db.batch()
+batch_size = 0
+for i, doc_id in enumerate(to_fix):
+    batch.update(db.collection('posts').document(doc_id), {'status': 'Odrzucone'})
+    batch_size += 1
+    if batch_size == 500:
+        batch.commit(); batch = db.batch(); batch_size = 0
+        print(f'Zaktualizowano {i+1}/{len(to_fix)}...')
+if batch_size > 0:
+    batch.commit()
+print('Gotowe!')
+"
+```
+
+#### Dlaczego oznaczamy jako Odrzucone a NIE usuwamy
+Odrzucone wpisy w Firebase chronią przed duplikatami — syncSheets
+widzi je w pamięci (`posts[id]`) i pomija. Gdybyśmy usunęli,
+syncSheets dodałby je ponownie przy następnym uruchomieniu.
+
+### GŁÓWNA NAPRAWA — flaga _appInitialized
+
+Problem: `onAuthStateChanged` odpala się wielokrotnie (przy odnowieniu
+tokenu, zmianie stanu sieci, po deployu przez Service Worker).
+Każde odpalenie wywoływało `loadAll()` + `syncSheets()` od nowa.
+
+Rozwiązanie — flaga blokująca:
+```javascript
+let _appInitialized = false
+onAuthStateChanged(auth, async user => {
+  window._currentUser = user || null
+  if (user) {
+    showMainApp(user)
+    if (_appInitialized) return  // ← KLUCZOWE — blokuje wielokrotne loadAll
+    _appInitialized = true
+    await loadAll()
+    // ...
+    await syncSheets()
+    setInterval(syncSheets, 5 * 60 * 1000)
+  } else {
+    _appInitialized = false  // reset przy wylogowaniu
+    showAuthScreen()
+  }
+})
+```
+
+UWAGA: `_appInitialized` jest zmienną modułu ES6 — nie jest widoczna
+w `window` z konsoli przeglądarki. To normalne — działa poprawnie
+wewnątrz modułu mimo że `window._appInitialized` zwraca `undefined`.
+
+### PROBLEM Z SERVICE WORKER (sw.js)
+
+Nowy sw.js który próbowaliśmy wdrożyć powodował błędy:
+```
+TypeError: Failed to execute 'put' on 'Cache': Request method 'POST' is unsupported
+```
+SW próbował cachować requesty POST do Firebase — niemożliwe.
+
+ROZWIĄZANIE — przywrócono prostą wersję sw.js:
+```javascript
+const CACHE = 'xpost-v1'
+const STATIC = ['/', '/index.html']
+
+self.addEventListener('install', e => e.waitUntil(
+  caches.open(CACHE).then(c => c.addAll(STATIC))
+))
+
+self.addEventListener('fetch', e => e.respondWith(
+  caches.match(e.request).then(r => r || fetch(e.request))
+))
+```
+
+WAŻNE: Ta prosta wersja sw.js jest prawidłowa dla tej aplikacji.
+NIE zmieniaj sw.js na bardziej zaawansowany — powoduje problemy
+z cachowaniem requestów Firebase i Google Sheets.
+
+### PROBLEM Z SYNCSHEETS I CACHE SW
+
+syncSheets pobierał dane Google Sheets z cache Service Workera
+zamiast świeżych danych — przez co nie widział nowych wpisów.
+
+Objaw: syncSheets zwraca `fulfilled` ale nie dodaje nowych wpisów.
+Data w nagłówku odpowiedzi Google Sheets jest stara (wczorajsza).
+
+Rozwiązanie: podmień sw.js na prostą wersję + hard refresh (`Ctrl+Shift+R`).
+
+### LICZBA DOKUMENTÓW W FIREBASE (stan po naprawie, 20.05.2026)
+```
+posts:        ~3872 (w tym ~3498 Odrzucone)
+tgSignals:      543
+tgWpisy:        182
+myPosts:         23
+notes:           12
+airdropTasks:  2411
+refLinks:        18
+konta:            3
+```
+
+Jedno otwarcie aplikacji = ~3872 odczytów (posts bez filtra).
+Przy limicie 50K Spark = max ~13 otwarć dziennie.
+Rozważyć migrację na Firebase Blaze (~$3-5/mies.).
+
+### OPTYMALIZACJA FIREBASE — CO DZIAŁA, CO NIE DZIAŁA
+
+✅ DZIAŁA BEZPIECZNIE:
+- Usunięcie pollingu TG co 2 minuty
+- Flaga _appInitialized blokująca wielokrotne loadAll
+- tgAutoLoad = 0 (TG nie ładuje się przy starcie)
+- Prosta wersja sw.js
+
+❌ NIE UŻYWAĆ — POWODUJE DUPLIKATY:
+- where('status','!=','Odrzucone') w query posts
+- limit() na kolekcji posts bez zachowania Odrzuconych w pamięci
+- Jakakolwiek modyfikacja query posts która wyklucza Odrzucone
+
+### RESET LIMITU FIREBASE
+Codziennie o 09:00 czasu polskiego (midnight Pacific Time, UTC-7 latem).
+
+### PLAN AWARYJNY GDY ZNOWU POJAWIĄ SIĘ DUPLIKATY
+
+1. Zakomentuj syncSheets w main.js (2 linie) → commit → czekaj na deploy
+2. Sprawdź minuty masowego dodania:
+```bash
+python3 -c "
+import firebase_admin; from firebase_admin import credentials, firestore
+from collections import Counter
+cred = credentials.Certificate('/root/tgbot/firebase_service_key.json')
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+docs = db.collection('posts').stream()
+minutes = Counter()
+for d in docs:
+    added = d.to_dict().get('addedAt','')
+    if 'DZISIAJ' in added:  # zmień na aktualną datę
+        minutes[added[:16]] += 1
+for m,c in sorted(minutes.items()): print(f'{m}: {c}')
+"
+```
+3. Oznacz duplikaty jako Odrzucone (skrypt powyżej)
+4. Odkomentuj syncSheets → commit
+5. Hard refresh aplikacji
+
+----
+
+## SESJA: Daily TODO + Publikowanie na X (19-20 Maj 2026)
+
+### Daily TODO — nowa zakładka
+
+Zakładka "📋 Daily TODO" obok "Moje wpisy" w głównym menu.
+Kolekcja Firebase: `dailyTasks`
+
+#### Struktura dokumentu
+```javascript
+{
+  id: 'todo_1716000000000',
+  name: 'Netrun Testnet',
+  links: [
+    { label: 'App', url: 'https://app.netrun.xyz' },
+    { label: 'Faucet', url: 'https://faucet.solana.com' },
+  ],
+  order: 0,
+  checkedAt: null,      // null = niezrobione, ISO string = zrobione
+  addedAt: '2026-05-19 10:00:00'
+}
+```
+
+#### Reset dzienny
+O 01:00 UTC = 02:00 czasu polskiego letniego / 01:00 zimowego.
+Mechanizm przez localStorage (klucz `todoLastReset`).
+Po zaznaczeniu checkbox — karta wyszarza się i zjeżdża na dół.
+Po resecie — wraca na oryginalne miejsce (wg pola `order`).
+
+#### Przycisk "📋 Dodaj do TODO" w zakładce Wpisy
+Otwiera modal z edytowalną nazwą projektu i listą rozwinietych
+linków z `p.links` (nie t.co!). Checkboxy do odznaczenia
+niechcianych linków, edytowalne etykiety (domyślnie domena).
+
+### Publikowanie na X — funkcja copyAndOpenX
+
+Problem: konto X oflagowane — brak API.
+Rozwiązanie: kopiuje tekst + otwiera x.com/compose/tweet.
+
+```javascript
+function copyAndOpenX(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    toast('📋 Skopiowano! Wklejaj na X (Ctrl+V)')
+    setTimeout(() => window.open('https://x.com/compose/tweet', '_blank'), 400)
+  }).catch(() => {
+    window.open('https://x.com/compose/tweet', '_blank')
+    toast('Otwarto X — wklej tekst ręcznie')
+  })
+}
+```
+
+Przyciski "🐦 Publikuj na X" dodane w:
+- Zakładka Wpisy — obok "Kopiuj parafrazę" (kopiuje parafrazę lub oryginał)
+- Zakładka Moje wpisy — obok "Kopiuj wpis"
+
+### tgbot.py — flagi włączania/wyłączania
+
+Dodano do `/root/tgbot/.env`:
+```
+TG_SYGNALY_ENABLED=false
+TG_WPISY_ENABLED=false
+```
+
+W tgbot.py (po linii WPISY_FILE):
+```python
+TG_SYGNALY_ENABLED = os.getenv('TG_SYGNALY_ENABLED', 'true').strip().lower() != 'false'
+TG_WPISY_ENABLED   = os.getenv('TG_WPISY_ENABLED',   'true').strip().lower() != 'false'
+```
+
+Nie wymaga restartu — aktywne przy następnym uruchomieniu crona.
+
+### tgAutoLoad — ustawienie w Firebase
+
+Ile ostatnich wpisów TG ładować przy starcie aplikacji.
+Zapisane w `airdropConfig/settings` jako pole `tgAutoLoad`.
+Wartość 0 = wyłączone (tylko przycisk Odśwież).
+Zmieniane w Ustawieniach aplikacji → "📡 Wczytywanie TG przy starcie".
+
+Aktualna wartość: 0 (wyłączone)
+
+### DO ZROBIENIA W KOLEJNYCH SESJACH
+
+- [ ] **MOD 2** — Publikowanie na X przez API (wymaga odblokowania konta X)
+- [ ] **MOD 6** — Słowa kluczowe w xparafbot.py + sekcja w Ustawieniach
+- [ ] **MOD 7** — Pobieranie całych wątków w xparafbot.py
+- [ ] **Eksport/import** — JSON/CSV dla zakładek: Wpisy, Moje wpisy, Daily TODO, Notatki, Linki ref, Konta
+- [ ] **Grupy/tagi w Daily TODO** — każde zadanie max 3 tagi, filtrowanie po tagu
+- [ ] **Firebase Blaze** — migracja na pay-as-you-go (~$3-5/mies.)
+
+----
+---
 
 ## 1. CZYM JEST APLIKACJA
 
