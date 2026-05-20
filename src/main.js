@@ -1,13 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.15
-// Data:            2026-05-19
-// Zmiany:          VPS-API, Daily TODO, PWA, MOD1-8,
-//                  _appInitialized (blokada wielokrotnego loadAll),
-//                  bulk select TG, refreshTgData, copyAndOpenX,
-//                  tgAutoLoad z Firebase, naprawa dat ISO
-// Poprzednia:      v2.14 (przed firebase-opt — bezpieczny backup)
-// Git tag:         v2.15
+// Wersja:          v2.16
+// Data:            2026-05-20
+// Zmiany:          Export/Import JSON wszystkich zakładek,
+//                  Tagi w Daily TODO (max 2, filtr, chipsy),
+//                  Layout Ustawień przebudowany na grid 2-kolumnowy
+// Poprzednia:      v2.15 (VPS-API, Daily TODO, PWA, MOD1-8)
+// Git tag:         v2.16
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -3001,17 +3000,37 @@ function renderAtSettings() {
   const el = document.getElementById('sub-ustawienia')
   if (!el) return
 
-  // Zbierz cookies z przeglądarki i pokaż ich nazwy + daty wygaśnięcia
-  // Cookies w przeglądarce nie ujawniają expiry przez JS (HttpOnly) —
-  // pokazujemy listę dostępnych cookies (non-HttpOnly) oraz info o sesji Firebase
   const cookieList = document.cookie
     ? document.cookie.split(';').map(c => c.trim()).filter(Boolean)
     : []
 
   el.innerHTML = `
-    <div style="max-width:560px;display:flex;flex-direction:column;gap:24px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:18px;align-items:start">
 
-      <!-- STATUSY -->
+      <!-- ═══ KOLUMNA 1 ═══ -->
+
+      <!-- EXPORT / IMPORT -->
+      <div class="form-card">
+        <div class="form-title">💾 Eksport / Import danych</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:12px;line-height:1.6">
+          Eksportuje wszystkie zakładki do pliku JSON (Wpisy moje, Daily TODO, Notatki, Linki ref, Konta).
+          Import wczytuje plik i zapisuje dane do Firebase (merge — nie nadpisuje istniejących).
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button class="btn btn-primary" style="width:100%;font-size:13px" onclick="exportAllData()">
+            ⬇️ Eksportuj wszystkie zakładki
+          </button>
+          <div style="position:relative">
+            <button class="btn" style="width:100%;font-size:13px" onclick="document.getElementById('import-json-input').click()">
+              ⬆️ Importuj z pliku JSON
+            </button>
+            <input type="file" id="import-json-input" accept=".json" style="display:none" onchange="importAllData(this)">
+          </div>
+        </div>
+        <div id="import-status" style="margin-top:10px;font-size:11px;color:var(--neon);display:none"></div>
+      </div>
+
+      <!-- STATUSY PROJEKTÓW -->
       <div class="form-card">
         <div class="form-title">📋 Statusy projektów</div>
         <div id="at-statuses-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
@@ -3028,7 +3047,7 @@ function renderAtSettings() {
         <button class="btn btn-primary" style="margin-top:10px;width:100%" onclick="saveAtStatuses()">💾 Zapisz statusy</button>
       </div>
 
-      <!-- TYPY -->
+      <!-- TYPY PROJEKTÓW -->
       <div class="form-card">
         <div class="form-title">🏷 Typy projektów</div>
         <div id="at-types-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
@@ -3048,35 +3067,29 @@ function renderAtSettings() {
       <!-- STATUS API -->
       <div class="form-card">
         <div class="form-title">📡 Status API — limity modeli AI</div>
-
-        <!-- GROQ -->
         <div style="margin-bottom:16px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
             <div>
               <span style="font-size:13px;font-weight:700;color:var(--text)">Groq</span>
-              <span style="font-size:11px;color:var(--text3);margin-left:8px">llama-3.3-70b-versatile (parafraza)</span>
+              <span style="font-size:11px;color:var(--text3);margin-left:8px">llama-3.3-70b-versatile</span>
             </div>
-            <div style="display:flex;gap:6px;align-items:center">
+            <div style="display:flex;gap:6px">
               <button class="btn" id="btn-check-groq" onclick="checkGroqStatus()" style="font-size:11px;padding:3px 10px">🔄 Odśwież</button>
-              <a href="https://console.groq.com/usage" target="_blank" class="btn" style="font-size:11px;padding:3px 10px">📊 Konsola ↗</a>
+              <a href="https://console.groq.com/usage" target="_blank" class="btn" style="font-size:11px;padding:3px 10px">📊 ↗</a>
             </div>
           </div>
           <div id="api-status-groq" style="background:var(--bg3);padding:10px 12px;border-radius:var(--r);border:1px solid var(--border)">
-            <div style="font-size:12px;color:var(--text3)">Brak danych — wygeneruj parafrazę lub kliknij "Sprawdź teraz"</div>
+            <div style="font-size:12px;color:var(--text3)">Brak danych — wygeneruj parafrazę lub kliknij Odśwież</div>
           </div>
-          <div style="font-size:11px;color:var(--text3);margin-top:4px">
-            ⚠️ Groq free tier: 30 zapytań/min, 6 000 tokenów/min, 1 000 zapytań/dzień (reset o północy UTC)
-          </div>
+          <div style="font-size:11px;color:var(--text3);margin-top:4px">⚠️ Free: 30 req/min, 6k tok/min, 1k req/dzień</div>
         </div>
-
-        <!-- Pozostałe — tylko linki -->
         <div style="border-top:1px solid var(--border);padding-top:12px">
-          <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:8px">Pozostałe providery — sprawdź w konsoli:</div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px">
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" class="btn" style="font-size:11px;padding:4px 12px">🟦 Gemini — AI Studio ↗</a>
-            <a href="https://cloud.cerebras.ai/platform" target="_blank" class="btn" style="font-size:11px;padding:4px 12px">🟧 Cerebras ↗</a>
-            <a href="https://cloud.sambanova.ai/" target="_blank" class="btn" style="font-size:11px;padding:4px 12px">🟩 SambaNova ↗</a>
-            <a href="https://openrouter.ai/activity" target="_blank" class="btn" style="font-size:11px;padding:4px 12px">🟪 OpenRouter ↗</a>
+          <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:8px">Pozostałe providery:</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" class="btn" style="font-size:11px;padding:4px 10px">🟦 Gemini ↗</a>
+            <a href="https://cloud.cerebras.ai/platform" target="_blank" class="btn" style="font-size:11px;padding:4px 10px">🟧 Cerebras ↗</a>
+            <a href="https://cloud.sambanova.ai/" target="_blank" class="btn" style="font-size:11px;padding:4px 10px">🟩 SambaNova ↗</a>
+            <a href="https://openrouter.ai/activity" target="_blank" class="btn" style="font-size:11px;padding:4px 10px">🟪 OpenRouter ↗</a>
           </div>
         </div>
       </div>
@@ -3084,64 +3097,49 @@ function renderAtSettings() {
       <!-- COOKIES / SESJA -->
       <div class="form-card">
         <div class="form-title">🍪 Cookies i sesja</div>
-        <div style="font-size:12px;color:var(--text3);margin-bottom:10px">
-          Cookies HttpOnly (w tym auth cookies XParafBota) nie są widoczne przez JavaScript ze względów bezpieczeństwa przeglądarki.
-          Poniżej widoczne są tylko cookies dostępne z poziomu JS oraz informacje o aktualnej sesji Firebase.
+        <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Sesja Firebase (Google Auth)</div>
+        ${(() => {
+          const user = window._currentUser
+          if (!user) return '<div style="color:var(--text3);font-size:12px">Brak zalogowanego użytkownika</div>'
+          const meta = user.metadata
+          const lastSignIn = meta?.lastSignInTime ? new Date(meta.lastSignInTime).toLocaleString('pl-PL') : '—'
+          const created   = meta?.creationTime   ? new Date(meta.creationTime).toLocaleString('pl-PL')   : '—'
+          return `
+            <div style="display:grid;grid-template-columns:130px 1fr;gap:4px 10px;font-size:12px;margin-bottom:12px">
+              <span style="color:var(--text3)">Email:</span><span style="color:var(--text)">${user.email||'—'}</span>
+              <span style="color:var(--text3)">Ostatnie logowanie:</span><span style="color:var(--text)">${lastSignIn}</span>
+              <span style="color:var(--text3)">Konto:</span><span style="color:var(--text)">${created}</span>
+              <span style="color:var(--text3)">Token:</span><span style="color:var(--neon4)">auto-refresh ~1h</span>
+            </div>`
+        })()}
+        <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">
+          Cookies JS (${cookieList.length})
         </div>
-
-        <div style="margin-bottom:14px">
-          <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Sesja Firebase (Google Auth)</div>
-          ${(() => {
-            const user = window._currentUser
-            if (!user) return '<div style="color:var(--text3);font-size:12px">Brak zalogowanego użytkownika</div>'
-            const meta = user.metadata
-            const lastSignIn = meta?.lastSignInTime ? new Date(meta.lastSignInTime).toLocaleString('pl-PL') : '—'
-            const created   = meta?.creationTime   ? new Date(meta.creationTime).toLocaleString('pl-PL')   : '—'
-            return `
-              <div style="display:grid;grid-template-columns:140px 1fr;gap:4px 10px;font-size:12px">
-                <span style="color:var(--text3)">Email:</span><span style="color:var(--text)">${user.email||'—'}</span>
-                <span style="color:var(--text3)">Ostatnie logowanie:</span><span style="color:var(--text)">${lastSignIn}</span>
-                <span style="color:var(--text3)">Konto utworzone:</span><span style="color:var(--text)">${created}</span>
-                <span style="color:var(--text3)">Token wygasa:</span><span style="color:var(--neon4)">co ~1 godzinę (auto-refresh)</span>
-              </div>`
-          })()}
-        </div>
-
-        <div>
-          <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">
-            Cookies JS-accessible (${cookieList.length})
-          </div>
-          ${cookieList.length
-            ? `<div style="display:flex;flex-direction:column;gap:3px">
-                ${cookieList.map(c => {
-                  const name = c.split('=')[0]
-                  return `<div style="font-size:11px;font-family:monospace;background:var(--bg3);padding:4px 8px;border-radius:4px;color:var(--text2)">${name}</div>`
-                }).join('')}
-              </div>`
-            : '<div style="font-size:12px;color:var(--text3)">Brak cookies JS-accessible (wszystkie są HttpOnly — to dobrze, znaczy że są chronione).</div>'
-          }
-          <div style="margin-top:10px;font-size:11px;color:var(--text3);line-height:1.6">
-            ⚠️ Cookies XParafBota (Playwright/GraphQL) są przechowywane lokalnie na VPS w pliku
-            <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">/root/xparafbot/cookies.json</code>
-            lub podobnym. Sprawdź datę modyfikacji tego pliku na VPS żeby ocenić świeżość cookies.
-          </div>
+        ${cookieList.length
+          ? `<div style="display:flex;flex-wrap:wrap;gap:4px">
+              ${cookieList.map(c => `<div style="font-size:10px;font-family:monospace;background:var(--bg3);padding:3px 7px;border-radius:4px;color:var(--text2)">${c.split('=')[0]}</div>`).join('')}
+            </div>`
+          : '<div style="font-size:12px;color:var(--text3)">Brak cookies JS-accessible (HttpOnly — dobrze).</div>'
+        }
+        <div style="margin-top:10px;font-size:11px;color:var(--text3);line-height:1.5">
+          Cookies XParafBota: <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">/root/xparafbot/cookies.json</code>
         </div>
       </div>
 
       ${import.meta.env.VITE_VPS_URL ? `
-      <!-- USTAWIENIE: TG AUTO-LOAD -->
+      <!-- TG AUTO-LOAD -->
       <div class="form-card">
         <div class="form-title">📡 Wczytywanie TG przy starcie</div>
-        <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Ile ostatnich wpisów z TG Sygnały i TG Wpisy wczytać automatycznie przy każdym otwarciu aplikacji. Mniej = mniej odczytów Firebase.</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Ile ostatnich wpisów TG wczytać automatycznie. Mniej = mniej odczytów Firebase.</div>
         <div style="display:flex;gap:8px;align-items:center">
-          <input id="tg-autoload-input" type="number" min="0" max="200" class="form-input" style="width:90px"
+          <input id="tg-autoload-input" type="number" min="0" max="200" class="form-input" style="width:80px"
             value="${tgAutoLoad}" placeholder="15">
           <button class="btn btn-primary" onclick="saveTgAutoLoad()">Zapisz</button>
-          <span style="font-size:11px;color:var(--text3)">0 = wyłączone (tylko przycisk Odśwież)</span>
+          <span style="font-size:11px;color:var(--text3)">0 = wyłączone</span>
         </div>
       </div>
 
-      <!-- MOD 8: OBSERWOWANE KONTA X -->
+      <!-- OBSERWOWANE KONTA X -->
       <div class="form-card">
         <div class="form-title">📋 Obserwowane konta X</div>
         <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
@@ -3157,10 +3155,10 @@ function renderAtSettings() {
         </div>
       </div>
 
-      <!-- MOD 8: KANAŁY TG SYGNAŁY -->
+      <!-- KANAŁY TG SYGNAŁY -->
       <div class="form-card">
         <div class="form-title">📢 Kanały TG — Sygnały</div>
-        <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Kanały numeryczne wpisuj z prefiksem -100</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Kanały numeryczne z prefiksem -100</div>
         <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
           ${vpsTgSignals.length ? vpsTgSignals.map(ch => `
             <div style="display:flex;gap:6px;align-items:center">
@@ -3174,10 +3172,10 @@ function renderAtSettings() {
         </div>
       </div>
 
-      <!-- MOD 8: KANAŁY TG WPISY -->
+      <!-- KANAŁY TG WPISY -->
       <div class="form-card">
         <div class="form-title">📢 Kanały TG — Wpisy</div>
-        <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Kanały numeryczne wpisuj z prefiksem -100</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Kanały numeryczne z prefiksem -100</div>
         <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
           ${vpsTgWpisy.length ? vpsTgWpisy.map(ch => `
             <div style="display:flex;gap:6px;align-items:center">
@@ -3193,7 +3191,7 @@ function renderAtSettings() {
       ` : `
       <div class="form-card">
         <div class="form-title">⚙️ Zarządzanie kontami VPS</div>
-        <div style="font-size:12px;color:var(--text3)">Aby zarządzać kontami X i kanałami TG, ustaw zmienną <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">VITE_VPS_URL</code> w Vercel.</div>
+        <div style="font-size:12px;color:var(--text3)">Ustaw zmienną <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">VITE_VPS_URL</code> w Vercel aby zarządzać kontami X i kanałami TG.</div>
       </div>
       `}
 
@@ -3249,6 +3247,132 @@ async function saveAtTypes() {
   renderAtSettings()
   renderAirdrop()
   toast('Typy zapisane ✓')
+}
+
+// ── EXPORT / IMPORT JSON ──────────────────────────────────────────
+async function exportAllData() {
+  toast('⏳ Przygotowuję eksport...')
+  try {
+    const data = {
+      _meta: {
+        exportedAt: new Date().toISOString(),
+        version: 'v2.16',
+        app: 'XPost Manager'
+      },
+      wpisy:      Object.entries(posts).map(([id, v]) => ({ _id: id, ...v })),
+      mojeWpisy:  Object.entries(myPosts).map(([id, v]) => ({ _id: id, ...v })),
+      dailyTodo:  Object.entries(dailyTasks).map(([id, v]) => ({ _id: id, ...v })),
+      notatki:    Object.entries(notes).map(([id, v]) => ({ _id: id, ...v })),
+      linkiRef:   Object.entries(refLinks).map(([id, v]) => ({ _id: id, ...v })),
+      konta:      Object.entries(konta).map(([id, v]) => ({ _id: id, ...v })),
+    }
+    const json = JSON.stringify(data, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    const date = new Date().toISOString().slice(0,10)
+    a.href = url
+    a.download = `xpost-backup-${date}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    const counts = [
+      `Wpisy: ${data.wpisy.length}`,
+      `Moje wpisy: ${data.mojeWpisy.length}`,
+      `Daily TODO: ${data.dailyTodo.length}`,
+      `Notatki: ${data.notatki.length}`,
+      `Linki ref: ${data.linkiRef.length}`,
+      `Konta: ${data.konta.length}`
+    ].join(' · ')
+    toast(`✅ Eksport gotowy! ${counts}`)
+  } catch(e) {
+    console.error('Export error:', e)
+    toast('❌ Błąd eksportu: ' + e.message)
+  }
+}
+
+async function importAllData(input) {
+  const file = input.files?.[0]
+  if (!file) return
+  input.value = '' // reset input
+
+  const statusEl = document.getElementById('import-status')
+  const show = msg => { if (statusEl) { statusEl.textContent = msg; statusEl.style.display = 'block' } }
+
+  try {
+    show('⏳ Wczytuję plik...')
+    const text = await file.text()
+    const data = JSON.parse(text)
+
+    // Walidacja struktury
+    const validKeys = ['wpisy','mojeWpisy','dailyTodo','notatki','linkiRef','konta']
+    const found = validKeys.filter(k => Array.isArray(data[k]))
+    if (!found.length) {
+      show('❌ Nieprawidłowy plik — brak rozpoznanych zakładek')
+      toast('❌ Błąd importu: nieprawidłowy format pliku')
+      return
+    }
+
+    // Podsumowanie przed importem
+    const summary = found.map(k => {
+      const count = data[k].length
+      if (k === 'wpisy') {
+        const odrzucone = data[k].filter(i => i.status === 'Odrzucone').length
+        return `wpisy: ${count - odrzucone} (pominięto ${odrzucone} Odrzuconych)`
+      }
+      return `${k}: ${count}`
+    }).join('\n')
+    const ok = confirm(`Import danych:\n${summary}\n\nDane zostaną połączone z istniejącymi (merge).\nIstniejące rekordy z tym samym ID zostaną zaktualizowane.\n\nKontynuować?`)
+    if (!ok) { show(''); return }
+
+    show('⏳ Importuję...')
+    let total = 0
+    const MAP = {
+      wpisy:     'posts',
+      mojeWpisy: 'myPosts',
+      dailyTodo: 'dailyTasks',
+      notatki:   'notes',
+      linkiRef:  'refLinks',
+      konta:     'konta'
+    }
+    const LOCAL = {
+      wpisy:     posts,
+      mojeWpisy: myPosts,
+      dailyTodo: dailyTasks,
+      notatki:   notes,
+      linkiRef:  refLinks,
+      konta:     konta
+    }
+
+    for (const key of found) {
+      const colName = MAP[key]
+      const localObj = LOCAL[key]
+      // Dla kolekcji "wpisy" pomijamy statusu "Odrzucone" — chronią przed duplikatami
+      const items = key === 'wpisy'
+        ? data[key].filter(item => item.status !== 'Odrzucone')
+        : data[key]
+      // Batch po 400
+      for (let i = 0; i < items.length; i += 400) {
+        const chunk = items.slice(i, i + 400)
+        await Promise.all(chunk.map(item => {
+          const { _id, ...fields } = item
+          if (!_id) return Promise.resolve()
+          localObj[_id] = { ...fields }
+          return setDoc(doc(db, colName, _id), fields, { merge: true })
+        }))
+        total += chunk.length
+        show(`⏳ Zaimportowano ${total} rekordów...`)
+      }
+    }
+
+    // Odśwież widoki
+    renderMain(); renderMoje(); renderTodo(); renderNotes(); renderRef(); renderKonta()
+    show(`✅ Import zakończony — ${total} rekordów`)
+    toast(`✅ Import: ${total} rekordów z ${found.length} zakładek`)
+  } catch(e) {
+    console.error('Import error:', e)
+    show('❌ Błąd: ' + e.message)
+    toast('❌ Błąd importu: ' + e.message)
+  }
 }
 
 // ── STATYSTYKI ────────────────────────────────────────────────────
@@ -4864,6 +4988,8 @@ Object.assign(window, {
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
   importFromX, refreshTgData, copyAndOpenX, saveTgAutoLoad,
   renderTodo, toggleTodoCheck, openTodoForm, addTodoLinkRow, removeTodoLinkRow, closeTodoForm, saveTodoTask, deleteTodoTask, openTodoFromPost, saveTodoFromModal,
+  addTodoTagFromInput, removeTodoTag,
+  exportAllData, importAllData,
   tgToggleSig, tgToggleWpi, tgSelectAllSig, tgSelectAllWpi, tgClearSig, tgClearWpi, tgRejectSig, tgRejectWpi,
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
 })
@@ -4923,23 +5049,58 @@ function renderTodo() {
   // Sprawdź reset
   checkAndResetTodo()
 
-  const tasks = Object.entries(dailyTasks)
+  const allTasks = Object.entries(dailyTasks)
     .map(([id, t]) => ({...t, id}))
     .sort((a, b) => {
-      // Zaznaczone na dół, reszta wg kolejności
       const aD = a.checkedAt ? 1 : 0
       const bD = b.checkedAt ? 1 : 0
       if (aD !== bD) return aD - bD
       return (a.order || 0) - (b.order || 0)
     })
 
-  const done = tasks.filter(t => t.checkedAt).length
+  // Zbierz wszystkie unikalne tagi
+  const allTags = [...new Set(allTasks.flatMap(t => t.tags || []))].sort()
+
+  // Aktualny filtr tagu
+  const activeTag = document.getElementById('todo-tag-filter')?.value || ''
+
+  // Filtruj jeśli tag wybrany
+  const tasks = activeTag
+    ? allTasks.filter(t => (t.tags || []).includes(activeTag))
+    : allTasks
+
+  const done  = tasks.filter(t => t.checkedAt).length
   const total = tasks.length
+
+  // Grupowanie: zadania z tagami → po tagach, bez tagów → "Bez grupy"
+  // Tylko gdy nie ma aktywnego filtru
+  let groups = []
+  if (!activeTag) {
+    const noTag = tasks.filter(t => !(t.tags?.length))
+    const withTag = {}
+    allTags.forEach(tag => {
+      withTag[tag] = tasks.filter(t => (t.tags||[]).includes(tag))
+    })
+    // Sekcje: każdy tag, potem "Bez grupy"
+    allTags.forEach(tag => {
+      if (withTag[tag].length) groups.push({ label: `🏷️ ${tag}`, tasks: withTag[tag] })
+    })
+    if (noTag.length) groups.push({ label: '📌 Bez grupy', tasks: noTag })
+  } else {
+    groups = [{ label: null, tasks }]
+  }
 
   el.innerHTML = `
     <div class="section-header">
       <span style="font-size:13px;color:var(--text2)">Codzienne zadania — reset o 02:00 (czas letni) / 01:00 (czas zimowy)</span>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${allTags.length ? `
+          <select id="todo-tag-filter" onchange="renderTodo()"
+            style="padding:4px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:12px">
+            <option value="">🏷️ Wszystkie tagi</option>
+            ${allTags.map(tag => `<option value="${tag}" ${activeTag===tag?'selected':''}>${tag}</option>`).join('')}
+          </select>
+        ` : ''}
         <span style="font-size:12px;color:var(--text3)">${done}/${total} zrobione</span>
         <button class="btn-add" onclick="openTodoForm()">+ Nowe zadanie</button>
       </div>
@@ -4947,7 +5108,7 @@ function renderTodo() {
 
     <div id="todo-form-wrap" style="display:none"></div>
 
-    ${!tasks.length ? `
+    ${!allTasks.length ? `
       <div class="empty" style="padding:40px;text-align:center">
         <div style="font-size:32px;margin-bottom:12px">📋</div>
         <div style="color:var(--text2);margin-bottom:16px">Brak zadań Daily TODO</div>
@@ -4955,7 +5116,10 @@ function renderTodo() {
       </div>
     ` : `
       <div id="todo-cards" style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
-        ${tasks.map(t => renderTodoCard(t)).join('')}
+        ${groups.map(g => `
+          ${g.label ? `<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.07em;margin-top:6px;padding:0 4px">${g.label}</div>` : ''}
+          ${g.tasks.map(t => renderTodoCard(t)).join('')}
+        `).join('')}
       </div>
     `}
 
@@ -4967,6 +5131,19 @@ function renderTodo() {
 function renderTodoCard(t) {
   const done = !!t.checkedAt
   const links = t.links || []
+  const tags  = t.tags  || []
+  // Kolory tagów — cyklicznie
+  const TAG_COLORS = [
+    'rgba(0,229,255,.15);color:#00e5ff;border-color:rgba(0,229,255,.3)',
+    'rgba(251,191,36,.15);color:#fbbf24;border-color:rgba(251,191,36,.3)',
+    'rgba(167,139,250,.15);color:#a78bfa;border-color:rgba(167,139,250,.3)',
+    'rgba(52,211,153,.15);color:#34d399;border-color:rgba(52,211,153,.3)',
+    'rgba(248,113,113,.15);color:#f87171;border-color:rgba(248,113,113,.3)',
+  ]
+  const tagChip = (tag, i) => {
+    const c = TAG_COLORS[i % TAG_COLORS.length]
+    return `<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:10px;background:${c.split(';')[0].replace('rgba','rgba')};color:${c.split('color:')[1].split(';')[0]};border:1px solid ${c.split('border-color:')[1]};font-size:11px;white-space:nowrap;cursor:pointer" onclick="document.getElementById('todo-tag-filter') && (document.getElementById('todo-tag-filter').value='${tag}') && renderTodo()">🏷️ ${tag}</span>`
+  }
   return `
     <div class="card" id="todo-card-${t.id}" style="${done ? 'opacity:0.45;' : ''}">
       <div style="display:flex;align-items:center;gap:12px;padding:12px 16px">
@@ -4975,9 +5152,13 @@ function renderTodoCard(t) {
           onchange="toggleTodoCheck('${t.id}', this.checked)">
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;font-size:14px;color:var(--text);${done ? 'text-decoration:line-through;' : ''}">${t.name}</div>
+          ${tags.length ? `
+            <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">
+              ${tags.map((tag, i) => tagChip(tag, i)).join('')}
+            </div>` : ''}
           ${links.length ? `
             <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
-              ${links.map((l, i) => `
+              ${links.map(l => `
                 <a href="${l.url}" target="_blank" rel="noopener"
                   style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.2);color:var(--neon);font-size:12px;text-decoration:none;white-space:nowrap"
                   title="${l.url}">
@@ -5020,6 +5201,7 @@ function openTodoForm(editId = null) {
   if (!wrap) return
   const task = editId ? dailyTasks[editId] : null
   const links = task?.links || [{ label: '', url: '' }]
+  const tags  = task?.tags  || []
   const isEdit = !!editId
 
   wrap.style.display = 'block'
@@ -5030,6 +5212,26 @@ function openTodoForm(editId = null) {
         <div class="form-label">Nazwa projektu / zadania</div>
         <input class="form-input" id="todo-name" value="${task?.name || ''}" placeholder="np. Netrun Testnet">
       </div>
+
+      <!-- TAGI -->
+      <div style="margin-bottom:12px">
+        <div class="form-label" style="margin-bottom:6px">Tagi <span style="font-size:11px;color:var(--text3)">(max 2, Enter lub + aby dodać)</span></div>
+        <div id="todo-tags-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+          ${tags.map((tag, i) => `
+            <span id="todo-tag-chip-${i}" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:10px;background:rgba(0,229,255,.12);border:1px solid rgba(0,229,255,.25);color:var(--neon);font-size:12px">
+              🏷️ ${tag}
+              <button type="button" onclick="removeTodoTag(${i})" style="background:none;border:none;color:var(--neon);cursor:pointer;padding:0;font-size:13px;line-height:1">✕</button>
+            </span>
+          `).join('')}
+        </div>
+        <div style="display:flex;gap:6px">
+          <input class="form-input" id="todo-tag-input" placeholder="np. GM, DeFi, Codzienne"
+            style="flex:1"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();addTodoTagFromInput()}">
+          <button class="btn" style="white-space:nowrap;font-size:12px" onclick="addTodoTagFromInput()">+ Dodaj tag</button>
+        </div>
+      </div>
+
       <div class="form-label" style="margin-bottom:6px">Linki</div>
       <div id="todo-links-list" style="display:flex;flex-direction:column;gap:8px">
         ${links.map((l, i) => renderTodoLinkRow(i, l.label, l.url)).join('')}
@@ -5042,6 +5244,36 @@ function openTodoForm(editId = null) {
     </div>
   `
   document.getElementById('todo-name')?.focus()
+}
+
+// Pomocnicze funkcje tagów
+function _getTodoFormTags() {
+  return [...document.querySelectorAll('#todo-tags-chips span[id^="todo-tag-chip-"]')]
+    .map(el => el.textContent.trim().replace(/^🏷️\s*/, '').replace(/✕$/, '').trim())
+    .filter(Boolean)
+}
+
+function addTodoTagFromInput() {
+  const inp = document.getElementById('todo-tag-input')
+  if (!inp) return
+  const val = inp.value.trim()
+  if (!val) return
+  const current = _getTodoFormTags()
+  if (current.length >= 2) { toast('Max 2 tagi na zadanie'); inp.value = ''; return }
+  if (current.includes(val)) { inp.value = ''; return }
+  const chips = document.getElementById('todo-tags-chips')
+  if (!chips) return
+  const i = Date.now()
+  const span = document.createElement('span')
+  span.id = `todo-tag-chip-${i}`
+  span.style.cssText = 'display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:10px;background:rgba(0,229,255,.12);border:1px solid rgba(0,229,255,.25);color:var(--neon);font-size:12px'
+  span.innerHTML = `🏷️ ${val} <button type="button" onclick="this.parentElement.remove()" style="background:none;border:none;color:var(--neon);cursor:pointer;padding:0;font-size:13px;line-height:1">✕</button>`
+  chips.appendChild(span)
+  inp.value = ''
+}
+
+function removeTodoTag(i) {
+  document.getElementById(`todo-tag-chip-${i}`)?.remove()
 }
 
 function renderTodoLinkRow(i, label = '', url = '') {
@@ -5080,6 +5312,9 @@ async function saveTodoTask(editId) {
   const name = document.getElementById('todo-name')?.value.trim()
   if (!name) { toast('Podaj nazwę zadania'); return }
 
+  // Zbierz tagi
+  const tags = _getTodoFormTags()
+
   // Zbierz linki
   const rows = document.querySelectorAll('#todo-links-list > div[id^="todo-link-row-"]')
   const links = []
@@ -5092,16 +5327,14 @@ async function saveTodoTask(editId) {
 
   const now = nowStr()
   if (editId) {
-    // Edycja
-    const upd = { name, links, updatedAt: now }
+    const upd = { name, links, tags, updatedAt: now }
     dailyTasks[editId] = { ...dailyTasks[editId], ...upd }
     await updateDoc(doc(db, 'dailyTasks', editId), upd)
     toast('✅ Zadanie zaktualizowane')
   } else {
-    // Nowe
     const id = 'todo_' + Date.now()
     const order = Object.keys(dailyTasks).length
-    const task = { id, name, links, order, checkedAt: null, addedAt: now }
+    const task = { id, name, links, tags, order, checkedAt: null, addedAt: now }
     dailyTasks[id] = task
     await setDoc(doc(db, 'dailyTasks', id), task)
     toast('✅ Zadanie dodane')
