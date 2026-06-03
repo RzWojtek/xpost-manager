@@ -1,12 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.17
+// Wersja:          v2.18
 // Data:            2026-05-21
-// Zmiany:          Edytowalne statusy wpisów (zakładka Ustawienia),
-//                  POST_STATUSES ładowane z Firebase, filtr i selecty
-//                  dynamiczne, saveAtConfig naprawione (merge:true)
-// Poprzednia:      v2.16 (Export/Import JSON, Tagi Daily TODO)
-// Git tag:         v2.17
+// Zmiany:          Dynamiczne klikalne kafelki statystyk w Wpisach
+//                  (kafelek per status, klik filtruje listę),
+//                  usunięto kafelek Retweetów, dodano Odrzuconych
+// Poprzednia:      v2.17 (Edytowalne statusy wpisów)
+// Git tag:         v2.18
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -1520,13 +1520,70 @@ function toggleExpand(id) {
 // ── STATS & BADGES ────────────────────────────────────────────────
 function updateStats() {
   const all  = Object.values(posts)
-  const s    = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v }
   const isRT = p => p.isRT || (p.account && p.account.includes(' RT @'))
-  s('s-all',  all.filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane').length)
-  s('s-new',  all.filter(p=>p.status==='Nowy').length)
-  s('s-todo', all.filter(p=>p.status==='Do zrobienia'||p.status==='W toku').length)
-  s('s-done', all.filter(p=>p.status==='Opublikowane').length)
-  s('s-rt',   all.filter(p=>p.status!=='Odrzucone'&&p.status!=='Opublikowane'&&isRT(p)).length)
+  const cont = document.getElementById('main-stats')
+  if (!cont) return
+
+  // Kolory dla znanych statusów (nowe dostają neutralny)
+  const colorMap = {
+    'Nowy':         'var(--neon)',
+    'ZROBIĆ':       '#ef4444',
+    'Do zrobienia': '#f59e0b',
+    'W toku':       '#a78bfa',
+  }
+  const cnt = st => all.filter(p => p.status === st).length
+
+  // Kafelek "Wszystkich" — aktywne (bez Odrzucone/Opublikowane), klik resetuje filtr
+  const activeCount = all.filter(p => p.status !== 'Odrzucone' && p.status !== 'Opublikowane').length
+  let html = `
+    <div class="stat" style="cursor:pointer" onclick="filterByStatus('')" title="Pokaż wszystkie aktywne">
+      <div class="stat-n" style="color:var(--text)">${activeCount}</div>
+      <div class="stat-l">Wszystkich</div>
+    </div>`
+
+  // Kafelek per status z konfiguracji — klikalny, filtruje listę
+  for (const st of POST_STATUSES) {
+    const color = colorMap[st] || 'var(--text2)'
+    html += `
+    <div class="stat" style="cursor:pointer" onclick="filterByStatus('${st.replace(/'/g, "\\'")}')" title="Filtruj: ${st}">
+      <div class="stat-n" style="color:${color}">${cnt(st)}</div>
+      <div class="stat-l">${st}</div>
+    </div>`
+  }
+
+  // Opublikowane — licznik nieklikalny (Wpisy ich nie pokazują)
+  html += `
+    <div class="stat" title="Opublikowane są w zakładce Moje wpisy">
+      <div class="stat-n" style="color:var(--neon3)">${cnt('Opublikowane')}</div>
+      <div class="stat-l">Opublikowanych</div>
+    </div>`
+
+  // Odrzucone — licznik nieklikalny
+  html += `
+    <div class="stat" title="Odrzucone wpisy">
+      <div class="stat-n" style="color:#ef4444">${cnt('Odrzucone')}</div>
+      <div class="stat-l">Odrzuconych</div>
+    </div>`
+
+  cont.innerHTML = html
+}
+
+// Klik w kafelek statystyk → ustawia filtr statusu i odświeża listę
+function filterByStatus(status) {
+  const sel = document.getElementById('f-status')
+  if (sel) {
+    // Jeśli status nie jest opcją w dropdownie — dodaj tymczasowo, by filtr zadziałał
+    if (status && ![...sel.options].some(o => o.value === status)) {
+      const opt = document.createElement('option')
+      opt.value = status; opt.textContent = status
+      sel.appendChild(opt)
+    }
+    sel.value = status
+  }
+  renderMain()
+  // Przewiń do listy wpisów dla wygody
+  const list = document.getElementById('main-cards')
+  if (list) list.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function updateBadges() {
@@ -4116,16 +4173,7 @@ function buildApp() {
 
     <!-- WPISY -->
     <div id="page-main" class="page active">
-      <div class="stats" style="grid-template-columns:repeat(5,minmax(0,1fr))">
-        <div class="stat"><div class="stat-n" id="s-all" style="color:var(--text)">0</div><div class="stat-l">Wszystkich</div></div>
-        <div class="stat"><div class="stat-n" id="s-new" style="color:var(--neon)">0</div><div class="stat-l">Nowych</div></div>
-        <div class="stat"><div class="stat-n" id="s-todo" style="color:var(--neon4)">0</div><div class="stat-l">W toku</div></div>
-        <div class="stat"><div class="stat-n" id="s-done" style="color:var(--neon3)">0</div><div class="stat-l">Opublikowanych</div></div>
-        <div class="stat" style="cursor:pointer" onclick="document.getElementById('f-type').value='rt';renderMain()" title="Kliknij aby filtrować RT">
-          <div class="stat-n" id="s-rt" style="color:#a78bfa">0</div>
-          <div class="stat-l">Retweetów</div>
-        </div>
-      </div>
+      <div class="stats" id="main-stats" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))"></div>
       <div class="filters">
         <select id="f-account" onchange="renderMain()"><option value="">Wszystkie konta</option></select>
         <select id="f-status"  onchange="renderMain()">
@@ -5074,6 +5122,7 @@ Object.assign(window, {
   renderManualDrafts, updateManualDraftsBadge, startDraftEdit, cancelDraftEdit, saveDraftEdit, sendDraftToWpisy, deleteDraft, toggleDraftPreview,
   renderAiTools, toggleAitForm, openAitEdit, saveAiTool, deleteAiTool,
   renderStats,
+  filterByStatus,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
   exportAtCsv, duplicateAt, atSetSort,
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
