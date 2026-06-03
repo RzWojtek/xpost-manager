@@ -1,12 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.16
-// Data:            2026-05-20
-// Zmiany:          Export/Import JSON wszystkich zakładek,
-//                  Tagi w Daily TODO (max 2, filtr, chipsy),
-//                  Layout Ustawień przebudowany na grid 2-kolumnowy
-// Poprzednia:      v2.15 (VPS-API, Daily TODO, PWA, MOD1-8)
-// Git tag:         v2.16
+// Wersja:          v2.17
+// Data:            2026-05-21
+// Zmiany:          Edytowalne statusy wpisów (zakładka Ustawienia),
+//                  POST_STATUSES ładowane z Firebase, filtr i selecty
+//                  dynamiczne, saveAtConfig naprawione (merge:true)
+// Poprzednia:      v2.16 (Export/Import JSON, Tagi Daily TODO)
+// Git tag:         v2.17
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -680,6 +680,30 @@ function statusStyle(s) {
   return m[s] || ''
 }
 
+// Buduje <option> dla selecta statusu przy wpisie.
+// Bezpieczniki:
+//  - Opublikowane i Odrzucone ZAWSZE obecne (chronią syncSheets przed duplikatami)
+//  - jeśli wpis ma status spoza listy (np. usunięty z konfiguracji) — dodajemy go,
+//    żeby select pokazał aktualną wartość i nie zmienił jej przypadkiem
+function postStatusOptions(current) {
+  const list = [...POST_STATUSES, 'Opublikowane', 'Odrzucone']
+  if (current && !list.includes(current)) list.unshift(current)
+  return list.map(s => `<option${s === current ? ' selected' : ''}>${s}</option>`).join('')
+}
+
+// Odświeża listę opcji w dropdownie filtra statusów (zakładka Wpisy).
+// Wywoływane po loadAll() — bo buildApp() buduje HTML zanim POST_STATUSES
+// zostanie wczytane z Firebase. Zachowuje aktualnie wybraną wartość jeśli możliwe.
+function refreshStatusFilter() {
+  const sel = document.getElementById('f-status')
+  if (!sel) return
+  const prev = sel.value
+  sel.innerHTML = '<option value="">Wszystkie statusy</option>' +
+    POST_STATUSES.map(s => `<option>${s}</option>`).join('')
+  // Przywróć poprzedni wybór jeśli nadal istnieje na liście
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev
+}
+
 function badgeClass(s) {
   return {
     'Nowy':'badge-new','Do zrobienia':'badge-todo','W toku':'badge-wip',
@@ -804,6 +828,7 @@ async function loadAll() {
     const data = cfg.data()
     if (data.statuses?.length)              AT_STATUSES = data.statuses
     if (data.types?.length)                 AT_TYPES    = data.types
+    if (data.postStatuses?.length)          POST_STATUSES = data.postStatuses
     if (data.tgAutoLoad !== undefined)      tgAutoLoad  = parseInt(data.tgAutoLoad) || 15
   }
 }
@@ -1137,7 +1162,7 @@ function renderMain() {
         <a class="xlink" href="${p.xLink||'#'}" target="_blank">Otwórz na X ↗</a>
         <span class="post-date">📅 ${p.xDate}</span>
         <select class="status-sel" style="${statusStyle(p.status)}" onchange="setPostStatus('${p.id}',this.value)">
-          ${['Nowy','ZROBIĆ','Do zrobienia','W toku','Opublikowane','Odrzucone'].map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}
+          ${postStatusOptions(p.status)}
         </select>
       </div>
       ${linksH}${imgsH}
@@ -2409,6 +2434,13 @@ function toggleTgExpand(prefix, id) {
 let AT_STATUSES = ['TODO','DONE na 1 koncie','DONE na 3 walletach','DONE na 3 kontach gmail','DONE na 5 walletach','Pominięty']
 let AT_TYPES    = ['Testnet','Mainnet','WL','Airdrop','Inne']
 
+// ── STATUSY WPISÓW (edytowalne w Ustawieniach) ────────────────────
+// Statusy widoczne w dropdownie filtra i przy każdym wpisie w zakładce Wpisy.
+// Opublikowane i Odrzucone są zawsze doklejane osobno (bezpiecznik anty-duplikat),
+// więc NIE umieszczamy ich tutaj.
+const POST_STATUSES_DEFAULT = ['Nowy','ZROBIĆ','Do zrobienia','W toku']
+let POST_STATUSES = [...POST_STATUSES_DEFAULT]
+
 function atStatusStyle(s) {
   if (!s) return 'background:rgba(245,158,11,.12);color:#f59e0b'
   const u = s.toUpperCase()
@@ -2990,10 +3022,12 @@ async function importAtXlsx(input) {
 
 // ── AIRDROP SETTINGS ─────────────────────────────────────────────
 async function saveAtConfig() {
+  // merge:true — chroni inne pola dokumentu (postStatuses, tgAutoLoad)
+  // przed skasowaniem przy zapisie statusów/typów projektów
   await setDoc(doc(db, 'airdropConfig', 'settings'), {
     statuses: AT_STATUSES,
     types:    AT_TYPES,
-  })
+  }, { merge: true })
 }
 
 function renderAtSettings() {
@@ -3045,6 +3079,27 @@ function renderAtSettings() {
           <button class="btn btn-primary" style="white-space:nowrap" onclick="addAtStatus()">+ Dodaj</button>
         </div>
         <button class="btn btn-primary" style="margin-top:10px;width:100%" onclick="saveAtStatuses()">💾 Zapisz statusy</button>
+      </div>
+
+      <!-- STATUSY WPISÓW -->
+      <div class="form-card">
+        <div class="form-title">📝 Statusy wpisów</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:12px;line-height:1.6">
+          Statusy widoczne w filtrze i przy każdym wpisie w zakładce „Wpisy".
+          „Opublikowane" i „Odrzucone" są zawsze dostępne automatycznie i nie trzeba ich tu dodawać.
+        </div>
+        <div id="post-statuses-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+          ${POST_STATUSES.map((s,i) => `
+            <div style="display:flex;gap:6px;align-items:center">
+              <input class="form-input" value="${s}" id="pst-${i}" style="flex:1">
+              <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;flex-shrink:0" onclick="removePostStatus(${i})">✕</button>
+            </div>`).join('')}
+        </div>
+        <div style="display:flex;gap:6px">
+          <input class="form-input" id="pst-new" placeholder="Nowy status..." style="flex:1">
+          <button class="btn btn-primary" style="white-space:nowrap" onclick="addPostStatus()">+ Dodaj</button>
+        </div>
+        <button class="btn btn-primary" style="margin-top:10px;width:100%" onclick="savePostStatuses()">💾 Zapisz statusy wpisów</button>
       </div>
 
       <!-- TYPY PROJEKTÓW -->
@@ -3222,6 +3277,44 @@ async function saveAtStatuses() {
   renderAtSettings()
   renderAirdrop() // odśwież dropdowny w tabeli
   toast('Statusy zapisane ✓')
+}
+
+// ── STATUSY WPISÓW — zarządzanie w Ustawieniach ──────────────────
+function addPostStatus() {
+  const inp = document.getElementById('pst-new')
+  const val = inp?.value.trim()
+  if (!val) return
+  // Nie dodawaj duplikatów ani zarezerwowanych statusów systemowych
+  const reserved = ['Opublikowane', 'Odrzucone']
+  if (reserved.includes(val)) { toast('Ten status jest zawsze dostępny automatycznie'); return }
+  if (POST_STATUSES.includes(val)) { toast('Taki status już istnieje'); return }
+  POST_STATUSES.push(val)
+  inp.value = ''
+  renderAtSettings()
+}
+
+function removePostStatus(i) {
+  POST_STATUSES.splice(i, 1)
+  renderAtSettings()
+}
+
+async function savePostStatuses() {
+  // Zbierz aktualne wartości z inputów (użytkownik mógł edytować)
+  POST_STATUSES = POST_STATUSES.map((_,i) => {
+    const el = document.getElementById(`pst-${i}`)
+    return el ? el.value.trim() : _
+  }).filter(Boolean)
+  // Usuń ewentualne duplikaty i statusy zarezerwowane
+  const reserved = ['Opublikowane', 'Odrzucone']
+  POST_STATUSES = [...new Set(POST_STATUSES)].filter(s => !reserved.includes(s))
+  // Bezpiecznik: nigdy nie zostawiaj pustej listy — przywróć domyślne
+  if (POST_STATUSES.length === 0) POST_STATUSES = [...POST_STATUSES_DEFAULT]
+  // merge:true — NIE nadpisuje AT_STATUSES/AT_TYPES w tym samym dokumencie
+  await setDoc(doc(db, 'airdropConfig', 'settings'), { postStatuses: POST_STATUSES }, { merge: true })
+  renderAtSettings()
+  refreshStatusFilter() // odśwież dropdown filtra w zakładce Wpisy
+  renderMain()          // odśwież selecty przy wpisach
+  toast('Statusy wpisów zapisane ✓')
 }
 
 function addAtType() {
@@ -4037,7 +4130,7 @@ function buildApp() {
         <select id="f-account" onchange="renderMain()"><option value="">Wszystkie konta</option></select>
         <select id="f-status"  onchange="renderMain()">
           <option value="">Wszystkie statusy</option>
-          <option>Nowy</option><option>ZROBIĆ</option><option>Do zrobienia</option><option>W toku</option>
+          ${POST_STATUSES.map(s=>`<option>${s}</option>`).join('')}
         </select>
         <select id="f-type" onchange="renderMain()">
           <option value="">Posty i RT</option>
@@ -4984,6 +5077,7 @@ Object.assign(window, {
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
   exportAtCsv, duplicateAt, atSetSort,
   renderAtSettings, addAtStatus, removeAtStatus, saveAtStatuses, addAtType, removeAtType, saveAtTypes,
+  addPostStatus, removePostStatus, savePostStatuses,
   checkGroqStatus, renderGroqStatusCard, resetGroqCounter,
   atToggleOne, atToggleAll, updateAtBulkBar, deleteAtSelected, hideAtSelected, toggleAtHide, toggleAtShowHidden, atExpandCell, atLinkify,
   importFromX, refreshTgData, copyAndOpenX, saveTgAutoLoad,
@@ -5447,6 +5541,7 @@ onAuthStateChanged(auth, async user => {
     await loadAll()
     await loadEmojis()
     renderEmojiPanel()
+    refreshStatusFilter()
     renderMain(); renderMoje(); renderTodo(); renderNotes(); renderRef(); renderKonta(); renderAirdrop(); renderAiTools(); renderManualDrafts()
     updateStats(); updateBadges()
     await syncSheets()
