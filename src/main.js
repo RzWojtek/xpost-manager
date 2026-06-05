@@ -1,14 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.20
+// Wersja:          v2.21
 // Data:            2026-06-05
-// Zmiany:          Przypomnienia PUSH jako osobna zakładka (między Notatki/Linki ref):
-//                  własne (raz/codziennie/co tydzień + link), minty NFT (wyprzedzenia),
-//                  lista nadchodzących z EDYCJĄ i usuwaniem. Przycisk "Włącz
-//                  powiadomienia" zostaje w Ustawieniach. Kolekcje: fcmTokens, reminders.
-//                  sw.js NIETKNIĘTY (osobny firebase-messaging-sw.js, wąski scope).
-// Poprzednia:      v2.19 (Fundament FCM + karta w Ustawieniach)
-// Git tag:         v2.20
+// Zmiany:          Wysłane przypomnienia nie znikają — zostają jako "nieaktywne"
+//                  (wyszarzone, na dole listy). Edycja je reaktywuje (sent=false),
+//                  ręczne usuwanie nadal działa. Badge liczy tylko aktywne.
+// Poprzednia:      v2.20 (Przypomnienia jako osobna zakładka + edycja)
+// Git tag:         v2.21
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -897,72 +895,68 @@ function renderReminderList() {
   const el = document.getElementById('reminder-list')
   if (!el) return
 
-  const now = Date.now()
   const groups = {}   // groupId -> [ [id, r], ... ]  (nft)
   const singles = []  // [ [id, r], ... ]  (custom)
-
   for (const [id, r] of Object.entries(_remindersCache)) {
-    if (r.type === 'nft' && r.groupId) {
-      (groups[r.groupId] ||= []).push([id, r])
-    } else {
-      const recurring = r.recurring === 'daily' || r.recurring === 'weekly'
-      if (recurring || !r.sent) singles.push([id, r])
-    }
+    if (r.type === 'nft' && r.groupId) (groups[r.groupId] ||= []).push([id, r])
+    else singles.push([id, r])
   }
+
+  const rowHtml = (icon, title, sub, editCall, delCall, inactive) => `
+    <div style="display:flex;gap:10px;align-items:center;background:var(--bg3);padding:8px 12px;border-radius:8px;${inactive ? 'opacity:.55' : ''}">
+      <span style="flex-shrink:0">${icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px">
+          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</span>
+          ${inactive ? `<span style="font-size:10px;font-weight:600;color:var(--text3);border:1px solid var(--border2);border-radius:4px;padding:1px 5px;flex-shrink:0">wysłane</span>` : ''}
+        </div>
+        <div style="font-size:11px;color:var(--text3)">${sub}</div>
+      </div>
+      <button class="btn" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="${editCall}" title="Edytuj (reaktywuje)">✏️</button>
+      <button class="btn btn-danger" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="${delCall}">✕</button>
+    </div>`
 
   const rows = []
 
-  // minty NFT — jeden wiersz na grupę (jeśli choć jedno wyprzedzenie niewysłane)
+  // minty NFT — jeden wiersz na grupę; nieaktywny gdy WSZYSTKIE alerty wysłane
   for (const [groupId, docs] of Object.entries(groups)) {
-    const live = docs.filter(([,r]) => !r.sent)
-    if (!live.length) continue
     const any = docs[0][1]
     const mintAt = any.mintAt || any.remindAt || 0
+    const live = docs.filter(([,r]) => !r.sent)
+    const inactive = live.length === 0
     const leads = docs.map(([,r]) => r.lead).sort((a,b) => b - a).map(leadLabel).join(' / ')
-    const name = any.mintName || (any.title || '').replace(/^Mint:\s*/, '')
+    const name = (any.mintName || (any.title || '').replace(/^Mint:\s*/, '')).replace(/</g,'&lt;')
     rows.push({
-      sort: Math.min(...live.map(([,r]) => r.remindAt || 0)),
-      html: `
-        <div style="display:flex;gap:10px;align-items:center;background:var(--bg3);padding:8px 12px;border-radius:8px">
-          <span style="flex-shrink:0">🖼️</span>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Mint: ${name.replace(/</g,'&lt;')}</div>
-            <div style="font-size:11px;color:var(--text3)">${fmtTs(mintAt)} · alerty: ${leads}</div>
-          </div>
-          <button class="btn" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="editReminderNft('${groupId}')">✏️</button>
-          <button class="btn btn-danger" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="deleteReminderGroup('${groupId}')">✕</button>
-        </div>`
+      sort: inactive ? mintAt : Math.min(...live.map(([,r]) => r.remindAt || 0)),
+      inactive,
+      html: rowHtml('🖼️', `Mint: ${name}`, `${fmtTs(mintAt)} · alerty: ${leads}`,
+        `editReminderNft('${groupId}')`, `deleteReminderGroup('${groupId}')`, inactive)
     })
   }
 
-  // własne / cykliczne
-  const icon = { custom:'📌' }
+  // własne / cykliczne — jednorazowe wysłane = nieaktywne; cykliczne zawsze aktywne
   for (const [id, r] of singles) {
-    const recurring = r.recurring === 'daily' ? 'codziennie' : r.recurring === 'weekly' ? 'co tydzień' : null
-    const when = recurring ? `${recurring} · ${fmtTs(r.remindAt)}` : fmtTs(r.remindAt)
+    const rec = r.recurring === 'daily' ? 'codziennie' : r.recurring === 'weekly' ? 'co tydzień' : null
+    const inactive = !rec && !!r.sent
+    const sub = rec ? `${rec} · ${fmtTs(r.remindAt)}` : fmtTs(r.remindAt)
     rows.push({
       sort: r.remindAt || 0,
-      html: `
-        <div style="display:flex;gap:10px;align-items:center;background:var(--bg3);padding:8px 12px;border-radius:8px">
-          <span style="flex-shrink:0">${icon[r.type] || '🔔'}</span>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(r.title||'').replace(/</g,'&lt;')}</div>
-            <div style="font-size:11px;color:var(--text3)">${when}</div>
-          </div>
-          <button class="btn" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="editReminderCustom('${id}')">✏️</button>
-          <button class="btn btn-danger" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="deleteReminderOne('${id}')">✕</button>
-        </div>`
+      inactive,
+      html: rowHtml('📌', (r.title||'').replace(/</g,'&lt;'), sub,
+        `editReminderCustom('${id}')`, `deleteReminderOne('${id}')`, inactive)
     })
   }
 
   const badge = document.getElementById('tab-przyp-badge')
-  if (badge) badge.textContent = rows.length
+  if (badge) badge.textContent = rows.filter(r => !r.inactive).length
 
   if (!rows.length) {
     el.innerHTML = `<div style="font-size:12px;color:var(--text3)">Brak zaplanowanych przypomnień.</div>`
     return
   }
-  el.innerHTML = rows.sort((a,b) => a.sort - b.sort).map(r => r.html).join('')
+  // aktywne najpierw (wg czasu), nieaktywne na dole
+  rows.sort((a,b) => (a.inactive - b.inactive) || (a.sort - b.sort))
+  el.innerHTML = rows.map(r => r.html).join('')
 }
 
 async function addCustomReminder() {
