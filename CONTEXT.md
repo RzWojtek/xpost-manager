@@ -1,5 +1,5 @@
 # CONTEXT.md — XPost Manager + XParafBot + TGBot
-> Plik kontekstowy dla kolejnych sesji AI. Ostatnia aktualizacja: Maj 2026.
+> Plik kontekstowy dla kolejnych sesji AI. Ostatnia aktualizacja: Czerwiec 2026.
 
 ---
 ----
@@ -99,13 +99,17 @@ zrozumiałe i uczciwe, bez ukrywania ryzyka.
 ## WERSJONOWANIE main.js
 
 ### Aktualna wersja
-main.js: v2.15 (2026-05-20)
-Git tag: v2.15
-Zmiany: VPS-API, Daily TODO, PWA, MOD1-8, _appInitialized,
-        bulk TG, refreshTgData, copyAndOpenX, tgAutoLoad,
-        naprawa dat ISO, sw.js przywrócony do prostej wersji
+main.js: v2.21 (2026-06-05)
+Git tag: v2.21
+Zmiany: Powiadomienia PUSH (FCM HTTP v1) — zakładka "Przypomnienia",
+        minty NFT + własne + cykliczne, edycja, wysłane = nieaktywne.
+        Kolekcje fcmTokens + reminders. Osobny firebase-messaging-sw.js.
 
 ### Historia wersji
+- v2.21 — 2026-06-05 — wysłane przypomnienia zostają jako "nieaktywne" (edycja reaktywuje)
+- v2.20 — 2026-06-05 — przypomnienia jako osobna zakładka (Notatki/Linki ref) + edycja + powtarzanie
+- v2.19 — 2026-06-04 — fundament FCM (przycisk w Ustawieniach, getToken, fcmTokens) + karta
+- v2.18 — 2026-05-21 — dynamiczne kafelki statystyk w Wpisach
 - v2.15 — 2026-05-20 — wszystkie MOD + _appInitialized (stabilna)
 - v2.14 — przed firebase-opt (NIE używać — powoduje duplikaty)
 - v2.0  — backup-przed-modami (najstarszy bezpieczny backup)
@@ -417,6 +421,90 @@ Aktualna wartość: 0 (wyłączone)
 ----
 ---
 
+## SESJA: Powiadomienia PUSH (FCM) — Czerwiec 2026 (v2.19 → v2.21)
+
+### CEL
+Push na telefon (Android/Chrome), działający przy ZAMKNIĘTEJ aplikacji. Target: tylko
+Android Chrome (iOS/Safari pominięte). Trzy typy przypomnień: minty NFT, własne, cykliczne.
+
+### ARCHITEKTURA
+```
+[Zakładka Przypomnienia] --zapis--> [Firestore: reminders]
+                                          |
+                       [VPS cron co 20 min: push_sender.py --check]
+                                          | (czyta reminders + fcmTokens, omija reguły)
+                                  [FCM HTTP v1 API]
+                                          v
+                          [firebase-messaging-sw.js na telefonie] --> powiadomienie
+```
+- Frontend tylko ZAPISUJE do `reminders` i rejestruje token w `fcmTokens`.
+- VPS (admin SDK) czyta i wysyła. To rozdzielenie jest celowe.
+
+### PLIKI (gdzie co leży)
+- `src/main.js` — moduł push + zakładka Przypomnienia (funkcje na window: enablePushNotifications,
+  addCustomReminder, addNftReminder, editReminderCustom, editReminderNft, cancelReminderEdit,
+  deleteReminderOne, deleteReminderGroup; render: loadReminders/renderReminders/renderReminderList).
+- `public/firebase-messaging-sw.js` — OSOBNY Service Worker FCM. Config wpisany NA SZTYWNO
+  (apiKey/appId są publiczne; firebase.js używa env vars, których SW nie widzi). VAPID public key
+  w main.js. onBackgroundMessage buduje powiadomienie z `data`; notificationclick robi deep-link.
+- `/root/tgbot/push_sender.py` — wysyłka FCM + tryb `--check` (cron) + `--list` + tryb testowy.
+
+### DECYZJE ARCHITEKTONICZNE (ważne dla przyszłych zmian)
+1. **OSOBNY firebase-messaging-sw.js, sw.js NIETKNIĘTY.** sw.js ma network-first i scope '/'.
+   FCM-owy SW rejestrowany z main.js w wąskim scope '/firebase-cloud-messaging-push-scope/'
+   przez `getToken(messaging, { vapidKey, serviceWorkerRegistration: swReg })`. Dwa SW współistnieją.
+2. **Wiadomość FCM = TYLKO `data` (bez bloku notification/webpush).** Powiadomienie buduje SW
+   w onBackgroundMessage. Dzięki temu: link może być względny (np. '/?tab=airdrop') i NIE ma
+   ryzyka podwójnego powiadomienia (Chrome auto-display + SW). UWAGA: blok `notification`
+   wymagał `WebpushFCMOptions.link` jako pełnego HTTPS — porzucone.
+3. **Minty NFT = wiele doców po `groupId`** (po jednym na wyprzedzenie 24h/1h/teraz). Lista
+   pokazuje 1 wiersz/grupę; edycja regeneruje grupę, usunięcie kasuje całą grupę.
+4. **Powtarzanie:** daily = +1 dzień, weekly = +7 dni (równe kroki zachowują dzień tygodnia
+   i godzinę; DST może raz/pół roku przesunąć o 1h — pomijalne).
+5. **Wysłane jednorazowe NIE znikają** (v2.21) — zostają jako "nieaktywne" (sent:true, wyszarzone,
+   na dole listy). Edycja ustawia sent:false → reaktywacja. Badge liczy tylko aktywne.
+
+### BEZPIECZEŃSTWO (zachowane)
+- Moduł dotyka WYŁĄCZNIE kolekcji `fcmTokens` + `reminders`. Zero zmian w posts/myPosts/notes/airdropTasks.
+- Święte funkcje (renderMain, syncSheets, setPostStatus, loadAll, renderNotes, renderRef) — hash
+  niezmieniony, weryfikowane diffem.
+- `firebase_service_key.json` na VPS: chmod 600, NIGDY do repo. To jedyny wrażliwy plik.
+- VAPID public + firebaseConfig (apiKey/appId) są PUBLICZNE — OK na sztywno w SW/frontendzie.
+
+### WDROŻENIE
+- Frontend (GitHub Web UI): podmień `src/main.js`, dodaj `public/firebase-messaging-sw.js`.
+  Sprawdź po deployu: `https://<domena>/firebase-messaging-sw.js` musi zwracać kod (nie 404).
+- VPS (WinSCP): wgraj `push_sender.py` do `/root/tgbot/`. Klucz: jeśli istniejący
+  `/root/tgbot/firebase_service_key.json` JEST z xpost-manager-e481d → nic nie wgrywaj.
+  Cron: `*/20 * * * * cd /root/tgbot && /usr/bin/python3 push_sender.py --check >> /root/tgbot/push.log 2>&1`
+
+### TEST (kolejność)
+1. Telefon: Ustawienia → 🔔 Włącz powiadomienia → zgoda → zielony status (= token zapisany).
+2. VPS: `python3 push_sender.py --list` → powinien pokazać 1 token.
+3. VPS: `python3 push_sender.py "Test" "Działa"` → push na telefon (nawet zamknięta apka).
+4. Zakładka Przypomnienia → dodaj własne za 2 min → `python3 push_sender.py --check` → push.
+
+### PUŁAPKI NAPOTKANE (żeby nie powtarzać)
+- **Stara kopia na VPS:** WinSCP potrafi pominąć nadpisanie ("Skip") — błąd `WebpushFCMOptions`
+  utrzymywał się mimo nowego kodu. Sprawdzenie: `grep -c WebpushFCMOptions push_sender.py` (ma być 0).
+- **Lokalizacja SW:** musi być w `public/` (Vite serwuje to spod '/'), NIE w src ani root repo.
+  index.html jest w root (punkt wejścia Vite), ale sw.js/firebase-messaging-sw.js w public/.
+- **Reguły Firestore:** frontend zapisujący token PODLEGA regułom (VPS je omija). Jeśli reguły
+  są per-kolekcja whitelist — trzeba dodać `fcmTokens` i `reminders` (allow read,write if auth != null).
+- **UserWarning Firestore** o positional args → użyto `where(filter=FieldFilter(...))`.
+- **Cron co 20 min** = przypomnienie może przyjść do 20 min później. Dla mintów polegać na
+  alertach z wyprzedzeniem (24h/1h), nie na "w momencie".
+
+### DO ROZWAŻENIA (faza 2, NIE zrobione — świadomie odłożone)
+- [ ] Daily TODO "sprytnie" — push tylko jeśli zadania NIE odhaczone dzisiaj (push_sender czyta
+      `dailyTasks`, liczy stan, synchronizuje z resetem 01:00 UTC). Na razie działa wersja prosta:
+      zwykłe przypomnienie cykliczne "codziennie" w zakładce Przypomnienia.
+- [ ] Przycisk "Utwórz powiadomienie" przy wpisie w zakładce Wpisy — ODRZUCONE na start
+      (ryzyko dla renderMain + zmęczenie powiadomieniami). Ewentualnie w panelu rozwiniętym wpisu.
+
+----
+---
+
 ## 1. CZYM JEST APLIKACJA
 
 Zintegrowany system do zarządzania treścią na platformie X (Twitter) i Telegram, składający się z trzech komponentów:
@@ -471,7 +559,13 @@ xpost-manager/
 ├── src/
 │   ├── main.js        ← CAŁA logika aplikacji (najważniejszy plik)
 │   ├── style.css      ← style dark neon
-│   └── firebase.js    ← inicjalizacja Firebase + Auth
+│   └── firebase.js    ← inicjalizacja Firebase + Auth (config z VITE_FIREBASE_* env)
+├── public/            ← serwowane spod roota URL (/)
+│   ├── sw.js          ← Service Worker aplikacji (network-first) — NIE MIESZAĆ z FCM
+│   ├── firebase-messaging-sw.js ← Service Worker FCM (push) — scope /firebase-cloud-messaging-push-scope/
+│   ├── manifest.json
+│   ├── icon-192.png   ← ikona powiadomień push (SW odwołuje się do /icon-192.png)
+│   └── icon-512.png
 ├── index.html
 ├── package.json       ← "firebase": "^10.7.0", "vite": "^5.0.0"
 ├── vite.config.js
@@ -500,9 +594,14 @@ xpost-manager/
 ├── tg_wpisy.txt           ← kanały bez filtrów (wszystkie wiadomości)
 ├── tg_last_seen.json      ← stan ostatnich ID per kanał
 ├── tgbot_session.session  ← sesja Telethon (konto osobiste)
-├── firebase_service_key.json ← klucz Admin SDK Firebase
+├── firebase_service_key.json ← klucz Admin SDK Firebase (xpost-manager-e481d, chmod 600)
+├── push_sender.py         ← wysyłka push FCM + cron --check (czyta reminders, omija reguły)
+├── push.log               ← log wysyłek push (z crona)
 └── .env
 ```
+> `push_sender.py` mieszka w tgbot, bo współdzieli klucz Firebase i `firebase-admin`
+> z botem TG (oba piszą/czytają projekt xpost-manager-e481d). Cron co 20 min:
+> `*/20 * * * * cd /root/tgbot && /usr/bin/python3 push_sender.py --check >> /root/tgbot/push.log 2>&1`
 
 ---
 
@@ -518,6 +617,45 @@ xpost-manager/
 | `tgSignals` | TGBot | Wiadomości TG filtrowane słowami kluczowymi |
 | `tgWpisy` | TGBot | Wszystkie wiadomości TG bez filtrów |
 | `konta` | Użytkownik | Kategorie kont (Twitter, TG, Email...) |
+| `fcmTokens` | Frontend (po "Włącz powiadomienia") | Tokeny urządzeń do push (FCM). docId pochodny od tokenu (idempotentnie) |
+| `reminders` | Użytkownik (zakładka Przypomnienia) | Zaplanowane powiadomienia push (minty NFT, własne, cykliczne) |
+
+### Struktura dokumentu `fcmTokens`
+```json
+{
+  "token": "string (token FCM urządzenia)",
+  "enabled": "boolean (true = aktywne)",
+  "userAgent": "string",
+  "uid": "string|null (uid zalogowanego użytkownika)",
+  "createdAt": "string", "updatedAt": "string"
+}
+```
+> docId = `tok_` + oczyszczony fragment tokenu → ten sam telefon nie duplikuje wpisów.
+> Martwe tokeny (FCM zwraca UNREGISTERED/SenderIdMismatch) auto-usuwa push_sender.py.
+
+### Struktura dokumentu `reminders`
+```json
+{
+  "id": "string (rem_xxx)",
+  "type": "custom | nft",
+  "title": "string",
+  "body": "string",
+  "url": "string (deep-link, np. '/?tab=airdrop' — względny OK)",
+  "remindAt": "number (epoch ms — absolutny moment najbliższego odpalenia)",
+  "recurring": "null | 'daily' | 'weekly'",
+  "sent": "boolean (jednorazowe: true po wysłaniu = nieaktywne; cykliczne ignorują)",
+  "createdAt": "string",
+  "groupId": "string (TYLKO nft — grupuje wyprzedzenia jednego mintu)",
+  "mintName": "string (TYLKO nft)",
+  "mintAt": "number (TYLKO nft — epoch ms startu mintu)",
+  "lead": "number (TYLKO nft — minuty wyprzedzenia: 1440/60/0)"
+}
+```
+> Mint NFT = kilka dokumentów z tym samym `groupId` (po jednym na wyprzedzenie 24h/1h/teraz).
+> Na liście pokazuje się jako JEDEN wiersz; edycja/usunięcie działa na całą grupę.
+> Jednorazowe po wysłaniu mają `sent:true` i są "nieaktywne" (wyszarzone na liście,
+> NIE znikają). Edycja ustawia `sent:false` → reaktywacja. Cykliczne: po wysłaniu
+> push_sender przesuwa `remindAt` o 1 dzień (daily) lub 7 dni (weekly).
 
 ### Struktura dokumentu `posts`
 ```json
@@ -577,17 +715,22 @@ xpost-manager/
 
 ## 5. ZAKŁADKI APLIKACJI (UI)
 
-### Główny pasek zakładek (7 zakładek)
+### Główny pasek zakładek
 
 | Zakładka | ID strony | Funkcja render | Dane z |
 |---|---|---|---|
 | Wpisy | `page-main` | `renderMain()` | Firestore `posts` |
 | Moje wpisy | `page-moje` | `renderMoje()` | Firestore `myPosts` |
 | Notatki | `page-notatki` | `renderNotes()` | Firestore `notes` |
+| 🔔 Przypomnienia | `page-przypomnienia` | `loadReminders()` → `renderReminders()` | Firestore `reminders` |
 | Linki ref | `page-ref` | `renderRef()` | Firestore `refLinks` |
 | 👤 Konta | `page-konta` | `renderKonta()` | Firestore `konta` |
 | ✍ Dodaj ręcznie | `page-manual` | `toggleManualForm()` / `addManualPost()` | Firestore `posts` |
 | Więcej ▾ | `page-wiecej` | `switchSubTab()` | — |
+
+> Zakładka "🔔 Przypomnienia" leży między "Notatki" a "Linki ref". Badge `tab-przyp-badge`
+> = liczba AKTYWNYCH przypomnień (wysłane jednorazowe się nie liczą). Mapowanie w
+> `switchTab` fn map: `przypomnienia:loadReminders`.
 
 ### Zakładka "Więcej ▾" — 4 podzakładki
 
@@ -774,6 +917,8 @@ G=Zrobione (checkbox) | H=Zdjęcia (Cloudinary URL) | I=Typ (Post/RT)
 - Filtr wykluczeń (LUB/I)
 - Dodawanie postów ręcznie
 - Kalendarz (heatmapa, miesięczna aktywność, historia publikacji)
+- **Powiadomienia PUSH (FCM)** — przycisk "Włącz" w Ustawieniach, zakładka Przypomnienia,
+  push na telefon przy zamkniętej apce, deep-link otwiera właściwą zakładkę. Cron co 20 min.
 
 ### Wymaga uwagi ⚠️
 - **Sesja TGBot** — zalogowana na innym numerze niż docelowy.
@@ -1620,6 +1765,112 @@ nie były pobierane — skrypt traktował `i` jako nazwę użytkownika.
 - Klik → `window.scrollTo({top:0, behavior:'smooth'})`
 - Umieszczony w lewym dolnym rogu (prawym nachodził na przycisk emoji)
 ----
+
+----
+
+## SESJA: Edytowalne statusy wpisów + klikalne kafelki (21 Maj 2026)
+
+### Kontekst dodatkowy z tej sesji
+
+**Diagnoza "brak nowych wpisów":** Aplikacja nie pokazywała nowych wpisów mimo
+działającego xparafbota. Przyczyna — **cache Service Workera** (sw.js cache-first
+serwował starą wersję aplikacji). Rozwiązanie: hard refresh (Ctrl+Shift+R) +
+przepisany sw.js na network-first (patrz niżej).
+
+**sw.js — przepisany na network-first:**
+- Stary: cache-first (`caches.match(e.request).then(r => r || fetch)`) → F5 pokazywał starą wersję
+- Nowy: network-first — zawsze pobiera świeżą wersję z sieci, cache TYLKO jako fallback offline
+- Dodano `skipWaiting()` + `clients.claim()` — nowy SW aktywuje się natychmiast
+- Zmieniono nazwę cache `xpost-v1` → `xpost-v2` (czyści stary cache u wszystkich)
+- **Efekt:** zwykłe F5 zawsze pobiera aktualną wersję, koniec z Ctrl+Shift+R
+
+**Potwierdzona architektura pobierania wpisów:**
+- xparafbot zapisuje TYLKO do Google Sheets (NIE do Firebase bezpośrednio)
+- syncSheets() w main.js: Google Sheets → Firebase (co 5 min + przy starcie)
+- Bezpiecznik anty-duplikat: `if (!id || posts[id]) continue` — wpis dodawany
+  TYLKO gdy ID nie istnieje w bazie. STATUS wpisu nie ma wpływu na pobieranie.
+  Odrzucone/Opublikowane nigdy nie wracają, bo ich ID już są w Firebase.
+- fetch_tweet.py (osobny skrypt, nie PM2) — wywoływany przez vps-api on-demand
+
+---
+
+### v2.17 — Edytowalne statusy wpisów
+
+**Cel:** Możliwość dodawania/usuwania/edycji statusów wpisów w zakładce Ustawienia
+(wcześniej hardcodowane: Nowy, ZROBIĆ, Do zrobienia, W toku).
+
+**Plik:** `src/main.js`
+
+**Zmiany (7 miejsc):**
+1. Nowa zmienna globalna `POST_STATUSES` + `POST_STATUSES_DEFAULT`
+   (`['Nowy','ZROBIĆ','Do zrobienia','W toku']`)
+2. `loadAll()` — wczytuje `POST_STATUSES` z `airdropConfig/settings` (pole `postStatuses`)
+3. Select przy wpisie (renderMain) — dynamiczny przez `postStatusOptions(current)`
+4. Filtr `f-status` w Wpisach — dynamiczny + `refreshStatusFilter()` po loadAll
+5. Nowa karta "📝 Statusy wpisów" w Ustawieniach (renderAtSettings)
+6. Funkcje `addPostStatus` / `removePostStatus` / `savePostStatuses`
+7. Rejestracja funkcji w `Object.assign(window, {...})`
+
+**KRYTYCZNE bezpieczniki:**
+- `postStatusOptions()` ZAWSZE dokleja 'Opublikowane' i 'Odrzucone' do selecta przy
+  wpisie (bezpiecznik anty-duplikat syncSheets) — NIE umieszczać ich w POST_STATUSES
+- Jeśli wpis ma status spoza listy (np. usunięty) → doklejany na początek selecta,
+  żeby nie zmienić przypadkiem wartości
+- Pusta lista statusów → automatyczny powrót do POST_STATUSES_DEFAULT
+- **NAPRAWIONO ukryty bug:** `saveAtConfig()` robił `setDoc` BEZ merge → kasował
+  `tgAutoLoad` (a od teraz kasowałby `postStatuses`). Dodano `{ merge: true }`.
+
+**Zachowanie przy usunięciu/zmianie statusu:**
+- Usunięcie statusu z listy NIE zmienia istniejących wpisów (dane w Firebase nietknięte)
+- Zmiana nazwy statusu = NIE migracja — stare wpisy zachowują starą nazwę
+- Status znika całkowicie dopiero gdy ostatni wpis przestanie go używać
+
+---
+
+### v2.18 — Dynamiczne klikalne kafelki statystyk
+
+**Cel:** Kafelki podsumowania w Wpisach — jeden per status, klikalne (filtrują listę).
+
+**Plik:** `src/main.js`
+
+**Zmiany (3 miejsca):**
+1. Statyczny HTML 5 kafelków → pusty kontener `<div id="main-stats">` z grid `auto-fit`
+2. `updateStats()` przepisany — buduje kafelki dynamicznie z `POST_STATUSES`
+3. Nowa funkcja `filterByStatus(status)` + rejestracja w window
+
+**Układ kafelków:**
+- "Wszystkich" (klikalny) → reset filtra, pokazuje aktywne
+- Kafelek per status z POST_STATUSES (klikalne) → `filterByStatus(st)` ustawia f-status
+- "Opublikowanych" (licznik NIEklikalny — Wpisy ich nie pokazują, są w Moje wpisy)
+- "Odrzuconych" (licznik NIEklikalny — NOWY, zamiast usuniętego "Retweetów")
+
+**Kolory:** Nowy=cyan, ZROBIĆ=#ef4444, Do zrobienia=#f59e0b, W toku=#a78bfa,
+nowe statusy=neutralny (var(--text2)).
+
+**Bezpieczniki:**
+- `filterByStatus` — gdy status nie jest opcją w dropdownie f-status, dodaje go
+  tymczasowo (filtr zawsze działa)
+- Apostrofy w nazwach statusów escapowane w onclick (`st.replace(/'/g,...)`)
+- `if (!cont) return` — brak crasha gdy kontener nie istnieje
+- Klik przewija do `#main-cards` (smooth scroll)
+
+**syncSheets, setPostStatus, updateBadges, renderMain — nietknięte (zweryfikowane diffem).**
+
+----
+## v2.20 — Przypomnienia jako osobna zakładka [2026-06-05]
+- Przeniesiono z karty Ustawień do zakładki "🔔 Przypomnienia" (między Notatki/Linki ref).
+- page-przypomnienia + reminders-page; switchTab map: przypomnienia:loadReminders.
+- Własne: treść+data+link+powtarzanie (once/daily/weekly). Mint NFT: grupowane po groupId
+  (1 wiersz na liście), edycja regeneruje grupę.
+- EDYCJA każdego wpisu (✏️ → prefill formularza → zapis przez updateDoc) + usuwanie
+  (deleteReminderOne / deleteReminderGroup). Badge tab-przyp = liczba nadchodzących.
+- push_sender.py: recurring daily (krok 1 dzień) + weekly (krok 7 dni).
+- W Ustawieniach został tylko przycisk "Włącz powiadomienia" + skrót do zakładki.
+- Funkcje na window: enablePushNotifications, addCustomReminder, addNftReminder,
+  editReminderCustom, editReminderNft, cancelReminderEdit, deleteReminderOne, deleteReminderGroup.
+- Reguła: push dotyka WYŁĄCZNIE fcmTokens + reminders. Święte funkcje niezmienione (hash).
+----
+
 ----
 
 ----
