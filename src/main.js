@@ -1,12 +1,14 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.18
-// Data:            2026-05-21
-// Zmiany:          Dynamiczne klikalne kafelki statystyk w Wpisach
-//                  (kafelek per status, klik filtruje listę),
-//                  usunięto kafelek Retweetów, dodano Odrzuconych
-// Poprzednia:      v2.17 (Edytowalne statusy wpisów)
-// Git tag:         v2.18
+// Wersja:          v2.20
+// Data:            2026-06-05
+// Zmiany:          Przypomnienia PUSH jako osobna zakładka (między Notatki/Linki ref):
+//                  własne (raz/codziennie/co tydzień + link), minty NFT (wyprzedzenia),
+//                  lista nadchodzących z EDYCJĄ i usuwaniem. Przycisk "Włącz
+//                  powiadomienia" zostaje w Ustawieniach. Kolekcje: fcmTokens, reminders.
+//                  sw.js NIETKNIĘTY (osobny firebase-messaging-sw.js, wąski scope).
+// Poprzednia:      v2.19 (Fundament FCM + karta w Ustawieniach)
+// Git tag:         v2.20
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -14,6 +16,8 @@ import {
   collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, where, limit, onSnapshot
 } from 'firebase/firestore'
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
+import { getApp } from 'firebase/app'
+import { getMessaging, getToken, onMessage, isSupported } from 'firebase/messaging'
 
 // ── CONFIG ────────────────────────────────────────────────────────
 const SHEET_ID  = import.meta.env.VITE_SHEET_ID
@@ -667,6 +671,424 @@ function copyText(txt) {
   navigator.clipboard.writeText(txt).then(() => toast('Skopiowano! ✓')).catch(() => toast('Skopiowano! ✓'))
 }
 
+// ════════════════════════════════════════════════════════════════
+// POWIADOMIENIA PUSH (FCM HTTP v1) + PRZYPOMNIENIA — v2.20
+// Fundament push: przycisk "Włącz powiadomienia" w Ustawieniach.
+// Zakładka "Przypomnienia" (między Notatki/Linki ref): własne
+// (raz / codziennie / co tydzień + opcjonalny link), minty NFT
+// (z wyprzedzeniami), lista nadchodzących z EDYCJĄ i usuwaniem.
+// Kolekcje: fcmTokens, reminders. sw.js NIETKNIĘTY (osobny SW).
+// ════════════════════════════════════════════════════════════════
+const VAPID_KEY    = 'BCoaL5cCly92fsxgPvahSI8FTlzzXnHWyE-w1EGby_HXnxACadb8W6AUSvrMw-c7eoskd86ZxzLrafV81Ix_tAs'
+const FCM_SW_URL   = '/firebase-messaging-sw.js'
+const FCM_SW_SCOPE = '/firebase-cloud-messaging-push-scope/'
+const DAY_MS = 86400000
+
+let _messaging = null
+let _foregroundBound = false
+
+async function getMessagingSafe() {
+  try {
+    if (_messaging) return _messaging
+    const supported = await isSupported().catch(() => false)
+    if (!supported) return null
+    _messaging = getMessaging(getApp())
+    return _messaging
+  } catch (e) {
+    console.warn('[push] Messaging niedostępne:', e?.message)
+    return null
+  }
+}
+
+async function setupForegroundPush() {
+  if (_foregroundBound) return
+  try {
+    const m = await getMessagingSafe()
+    if (!m) return
+    onMessage(m, payload => {
+      const title = payload?.notification?.title || payload?.data?.title || 'Powiadomienie'
+      const body  = payload?.notification?.body  || payload?.data?.body  || ''
+      toast(`🔔 ${title}${body ? ' — ' + body : ''}`)
+    })
+    _foregroundBound = true
+  } catch (e) {
+    console.warn('[push] onMessage błąd:', e?.message)
+  }
+}
+
+function refreshPushBtnState() {
+  const btn  = document.getElementById('push-enable-btn')
+  const stat = document.getElementById('push-status')
+  if (!btn || !stat) return
+  const perm = (typeof Notification !== 'undefined') ? Notification.permission : 'unsupported'
+  if (perm === 'unsupported') {
+    btn.disabled = true;  btn.textContent = '🔔 Powiadomienia niewspierane'
+    stat.textContent = 'Ta przeglądarka nie wspiera powiadomień.'; stat.style.color = 'var(--text3)'
+  } else if (perm === 'granted') {
+    btn.disabled = false; btn.textContent = '🔄 Odśwież / zarejestruj urządzenie'
+    stat.textContent = '✅ Powiadomienia włączone na tym urządzeniu.'; stat.style.color = 'var(--neon)'
+  } else if (perm === 'denied') {
+    btn.disabled = true;  btn.textContent = '🔔 Zablokowane w przeglądarce'
+    stat.textContent = '⛔ Odblokuj w ustawieniach strony (kłódka przy adresie).'; stat.style.color = '#ff6b6b'
+  } else {
+    btn.disabled = false; btn.textContent = '🔔 Włącz powiadomienia'
+    stat.textContent = 'Powiadomienia wyłączone.'; stat.style.color = 'var(--text3)'
+  }
+}
+
+async function enablePushNotifications() {
+  const btn = document.getElementById('push-enable-btn')
+  try {
+    if (typeof Notification === 'undefined') { toast('Przeglądarka nie wspiera powiadomień'); return }
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Proszę...' }
+
+    const perm = await Notification.requestPermission()
+    if (perm !== 'granted') { toast('Brak zgody na powiadomienia'); refreshPushBtnState(); return }
+
+    const m = await getMessagingSafe()
+    if (!m) { toast('Messaging niedostępne w tej przeglądarce'); refreshPushBtnState(); return }
+
+    const swReg = await navigator.serviceWorker.register(FCM_SW_URL, { scope: FCM_SW_SCOPE })
+    const token = await getToken(m, { vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg })
+    if (!token) { toast('Nie udało się pobrać tokenu FCM'); refreshPushBtnState(); return }
+
+    const safeId = 'tok_' + token.slice(0, 140).replace(/[^A-Za-z0-9_-]/g, '')
+    await setDoc(doc(db, 'fcmTokens', safeId), {
+      token, enabled: true,
+      userAgent: navigator.userAgent || '',
+      uid: window._currentUser?.uid || null,
+      updatedAt: nowStr(), createdAt: nowStr()
+    }, { merge: true })
+
+    await setupForegroundPush()
+    toast('✅ Powiadomienia włączone na tym urządzeniu')
+  } catch (e) {
+    console.error('[push] enable error:', e)
+    toast('Błąd powiadomień: ' + (e?.message || e))
+  } finally {
+    refreshPushBtnState()
+  }
+}
+
+// ── PRZYPOMNIENIA (kolekcja reminders) ───────────────────────────
+// type:'custom' -> recurring: null | 'daily' | 'weekly'
+// type:'nft'    -> grupa docs po groupId (po jednym na wyprzedzenie)
+let _remindersCache = {}
+let _remEdit = null  // { type:'custom', id } | { type:'nft', groupId }
+
+function leadLabel(min) {
+  if (min === 0)   return 'teraz'
+  if (min < 60)    return `${min} min`
+  if (min < 1440)  return `${Math.round(min/60)} h`
+  return `${Math.round(min/1440)} dni`
+}
+function fmtTs(ms) {
+  return new Date(ms || 0).toLocaleString('pl-PL', { hour12:false, day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',', '')
+}
+function msToLocalInput(ms) {
+  const d = new Date(ms || Date.now())
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+function repeatStep(recurring) {
+  return recurring === 'weekly' ? 7 * DAY_MS : DAY_MS
+}
+function advanceToFuture(ms, step) {
+  let t = ms
+  const now = Date.now()
+  while (t <= now) t += step
+  return t
+}
+
+async function loadReminders() {
+  try {
+    const snap = await getDocs(query(collection(db, 'reminders'), orderBy('remindAt', 'asc')))
+    _remindersCache = {}
+    snap.forEach(d => { _remindersCache[d.id] = d.data() })
+  } catch (e) {
+    console.warn('[reminders] load:', e?.message)
+    _remindersCache = {}
+  }
+  renderReminders()
+}
+
+function renderReminders() {
+  const el = document.getElementById('reminders-page')
+  if (!el) return
+
+  const perm = (typeof Notification !== 'undefined') ? Notification.permission : 'unsupported'
+  const statusHtml = perm === 'granted'
+    ? `<span style="color:var(--neon)">✅ Powiadomienia aktywne na tym urządzeniu</span>`
+    : `<span style="color:#f59e0b">⚠️ Włącz powiadomienia w zakładce <b>Więcej → Ustawienia</b>, inaczej push nie dojdzie</span>`
+
+  // tryb edycji — wartości do prefillu
+  const ce = _remEdit?.type === 'custom' ? _remindersCache[_remEdit.id] : null
+  const editingNft = _remEdit?.type === 'nft'
+  let nftName = '', nftDt = '', nftLeads = { 1440:true, 60:true, 0:true }
+  if (editingNft) {
+    const grp = Object.values(_remindersCache).filter(r => r.groupId === _remEdit.groupId)
+    if (grp.length) {
+      nftName = grp[0].mintName || (grp[0].title || '').replace(/^Mint:\s*/, '')
+      nftDt   = msToLocalInput(grp[0].mintAt || grp[0].remindAt)
+      nftLeads = { 1440:false, 60:false, 0:false }
+      grp.forEach(r => { nftLeads[r.lead] = true })
+    }
+  }
+
+  el.innerHTML = `
+    <div style="font-size:12px;margin-bottom:14px;line-height:1.6">${statusHtml}</div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:18px;align-items:start">
+
+      <!-- WŁASNE PRZYPOMNIENIE -->
+      <div class="form-card">
+        <div class="form-title">📌 ${ce ? 'Edytuj przypomnienie' : 'Własne przypomnienie'}</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div><div class="form-label">Treść</div>
+            <input class="form-input" id="cust-rem-title" placeholder="O czym przypomnieć..." value="${ce ? (ce.title||'').replace(/"/g,'&quot;') : ''}"></div>
+          <div><div class="form-label">Data i godzina ${ce && ce.recurring ? '(pierwsze / najbliższe)' : ''}</div>
+            <input class="form-input" id="cust-rem-dt" type="datetime-local" value="${ce ? msToLocalInput(ce.remindAt) : ''}"></div>
+          <div><div class="form-label">Link (opcjonalnie) — otworzy się po kliknięciu w push</div>
+            <input class="form-input" id="cust-rem-link" placeholder="https://..." value="${ce ? (ce.url && ce.url !== '/' ? ce.url : '') : ''}"></div>
+          <div><div class="form-label">Powtarzanie</div>
+            <select class="form-input" id="cust-rem-repeat">
+              <option value="once"   ${ce && !ce.recurring ? 'selected' : ''}>jednorazowo</option>
+              <option value="daily"  ${ce && ce.recurring === 'daily' ? 'selected' : ''}>codziennie</option>
+              <option value="weekly" ${ce && ce.recurring === 'weekly' ? 'selected' : ''}>co tydzień (ten sam dzień)</option>
+            </select></div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn btn-primary" style="flex:1;font-size:13px" onclick="addCustomReminder()">${ce ? '💾 Zapisz zmiany' : '📌 Dodaj'}</button>
+            ${ce ? `<button class="btn" style="font-size:13px" onclick="cancelReminderEdit()">Anuluj</button>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- MINT NFT -->
+      <div class="form-card">
+        <div class="form-title">🖼️ ${editingNft ? 'Edytuj mint NFT' : 'Przypomnienie o mincie NFT'}</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div><div class="form-label">Nazwa projektu / mintu</div>
+            <input class="form-input" id="nft-rem-name" placeholder="np. Pudgy Founders" value="${nftName.replace(/"/g,'&quot;')}"></div>
+          <div><div class="form-label">Data i godzina startu mintu</div>
+            <input class="form-input" id="nft-rem-dt" type="datetime-local" value="${nftDt}"></div>
+          <div><div class="form-label">Powiadom z wyprzedzeniem</div>
+            <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--text2);padding:2px 0">
+              <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="nft-lead-1440" ${nftLeads[1440] ? 'checked' : ''}> 24h przed</label>
+              <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="nft-lead-60" ${nftLeads[60] ? 'checked' : ''}> 1h przed</label>
+              <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="nft-lead-0" ${nftLeads[0] ? 'checked' : ''}> w momencie</label>
+            </div></div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn btn-primary" style="flex:1;font-size:13px" onclick="addNftReminder()">${editingNft ? '💾 Zapisz zmiany' : '🖼️ Zaplanuj mint'}</button>
+            ${editingNft ? `<button class="btn" style="font-size:13px" onclick="cancelReminderEdit()">Anuluj</button>` : ''}
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="form-title" style="margin:22px 0 10px">📅 Zaplanowane przypomnienia</div>
+    <div id="reminder-list" style="display:flex;flex-direction:column;gap:8px"></div>
+  `
+
+  renderReminderList()
+}
+
+function renderReminderList() {
+  const el = document.getElementById('reminder-list')
+  if (!el) return
+
+  const now = Date.now()
+  const groups = {}   // groupId -> [ [id, r], ... ]  (nft)
+  const singles = []  // [ [id, r], ... ]  (custom)
+
+  for (const [id, r] of Object.entries(_remindersCache)) {
+    if (r.type === 'nft' && r.groupId) {
+      (groups[r.groupId] ||= []).push([id, r])
+    } else {
+      const recurring = r.recurring === 'daily' || r.recurring === 'weekly'
+      if (recurring || !r.sent) singles.push([id, r])
+    }
+  }
+
+  const rows = []
+
+  // minty NFT — jeden wiersz na grupę (jeśli choć jedno wyprzedzenie niewysłane)
+  for (const [groupId, docs] of Object.entries(groups)) {
+    const live = docs.filter(([,r]) => !r.sent)
+    if (!live.length) continue
+    const any = docs[0][1]
+    const mintAt = any.mintAt || any.remindAt || 0
+    const leads = docs.map(([,r]) => r.lead).sort((a,b) => b - a).map(leadLabel).join(' / ')
+    const name = any.mintName || (any.title || '').replace(/^Mint:\s*/, '')
+    rows.push({
+      sort: Math.min(...live.map(([,r]) => r.remindAt || 0)),
+      html: `
+        <div style="display:flex;gap:10px;align-items:center;background:var(--bg3);padding:8px 12px;border-radius:8px">
+          <span style="flex-shrink:0">🖼️</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Mint: ${name.replace(/</g,'&lt;')}</div>
+            <div style="font-size:11px;color:var(--text3)">${fmtTs(mintAt)} · alerty: ${leads}</div>
+          </div>
+          <button class="btn" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="editReminderNft('${groupId}')">✏️</button>
+          <button class="btn btn-danger" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="deleteReminderGroup('${groupId}')">✕</button>
+        </div>`
+    })
+  }
+
+  // własne / cykliczne
+  const icon = { custom:'📌' }
+  for (const [id, r] of singles) {
+    const recurring = r.recurring === 'daily' ? 'codziennie' : r.recurring === 'weekly' ? 'co tydzień' : null
+    const when = recurring ? `${recurring} · ${fmtTs(r.remindAt)}` : fmtTs(r.remindAt)
+    rows.push({
+      sort: r.remindAt || 0,
+      html: `
+        <div style="display:flex;gap:10px;align-items:center;background:var(--bg3);padding:8px 12px;border-radius:8px">
+          <span style="flex-shrink:0">${icon[r.type] || '🔔'}</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(r.title||'').replace(/</g,'&lt;')}</div>
+            <div style="font-size:11px;color:var(--text3)">${when}</div>
+          </div>
+          <button class="btn" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="editReminderCustom('${id}')">✏️</button>
+          <button class="btn btn-danger" style="padding:3px 9px;font-size:12px;flex-shrink:0" onclick="deleteReminderOne('${id}')">✕</button>
+        </div>`
+    })
+  }
+
+  const badge = document.getElementById('tab-przyp-badge')
+  if (badge) badge.textContent = rows.length
+
+  if (!rows.length) {
+    el.innerHTML = `<div style="font-size:12px;color:var(--text3)">Brak zaplanowanych przypomnień.</div>`
+    return
+  }
+  el.innerHTML = rows.sort((a,b) => a.sort - b.sort).map(r => r.html).join('')
+}
+
+async function addCustomReminder() {
+  const titleEl = document.getElementById('cust-rem-title')
+  const dtEl    = document.getElementById('cust-rem-dt')
+  const linkEl  = document.getElementById('cust-rem-link')
+  const repEl   = document.getElementById('cust-rem-repeat')
+  const title = titleEl?.value.trim()
+  const dt    = dtEl?.value
+  const link  = linkEl?.value.trim() || '/'
+  const repeat = repEl?.value || 'once'
+  if (!title) { toast('Wpisz treść przypomnienia'); return }
+  if (!dt)    { toast('Podaj datę i godzinę'); return }
+
+  let remindAt = new Date(dt).getTime()
+  if (isNaN(remindAt)) { toast('Nieprawidłowa data'); return }
+  const recurring = repeat === 'once' ? null : repeat
+  if (!recurring && remindAt < Date.now() - 60000) { toast('Ten termin już minął'); return }
+  if (recurring) remindAt = advanceToFuture(remindAt, repeatStep(recurring))
+
+  if (_remEdit?.type === 'custom') {
+    const id = _remEdit.id
+    await updateDoc(doc(db, 'reminders', id), { title, url: link, remindAt, recurring, sent: false })
+    if (_remindersCache[id]) Object.assign(_remindersCache[id], { title, url: link, remindAt, recurring, sent: false })
+    _remEdit = null
+    renderReminders()
+    toast('💾 Zapisano zmiany ✓')
+    return
+  }
+
+  const id = 'rem_' + uid()
+  const r = { id, type:'custom', title, body:'', url: link, remindAt, recurring, sent:false, createdAt: nowStr() }
+  await setDoc(doc(db, 'reminders', id), r)
+  _remindersCache[id] = r
+  renderReminders()
+  toast('📌 Przypomnienie dodane ✓')
+}
+
+async function addNftReminder() {
+  const nameEl = document.getElementById('nft-rem-name')
+  const dtEl   = document.getElementById('nft-rem-dt')
+  const name = nameEl?.value.trim()
+  const dt   = dtEl?.value
+  if (!name) { toast('Podaj nazwę mintu'); return }
+  if (!dt)   { toast('Podaj datę i godzinę mintu'); return }
+  const baseMs = new Date(dt).getTime()
+  if (isNaN(baseMs)) { toast('Nieprawidłowa data'); return }
+
+  const leads = []
+  if (document.getElementById('nft-lead-1440')?.checked) leads.push(1440)
+  if (document.getElementById('nft-lead-60')?.checked)   leads.push(60)
+  if (document.getElementById('nft-lead-0')?.checked)    leads.push(0)
+  if (!leads.length) leads.push(0)
+
+  // edycja grupy: usuń stare docy tej grupy, potem odtwórz
+  let groupId
+  if (_remEdit?.type === 'nft') {
+    groupId = _remEdit.groupId
+    const old = Object.entries(_remindersCache).filter(([,r]) => r.groupId === groupId)
+    for (const [oid] of old) {
+      try { await deleteDoc(doc(db, 'reminders', oid)) } catch (_) {}
+      delete _remindersCache[oid]
+    }
+  } else {
+    groupId = 'grp_' + uid()
+  }
+
+  let planned = 0
+  for (const lead of leads) {
+    const remindAt = baseMs - lead * 60000
+    if (remindAt < Date.now() - 60000) continue
+    const id = 'rem_' + uid()
+    const r = {
+      id, groupId, type: 'nft',
+      mintName: name, mintAt: baseMs, lead,
+      title: `Mint: ${name}`,
+      body: lead === 0 ? 'Mint startuje TERAZ!' : `Za ${leadLabel(lead)} (start ${fmtTs(baseMs)})`,
+      remindAt, recurring: null, sent: false,
+      url: '/?tab=airdrop', createdAt: nowStr()
+    }
+    await setDoc(doc(db, 'reminders', id), r)
+    _remindersCache[id] = r
+    planned++
+  }
+  _remEdit = null
+  renderReminders()
+  toast(planned ? `🖼️ Zaplanowano mint "${name}" (${planned} alertów) ✓` : 'Wszystkie terminy już minęły')
+}
+
+function editReminderCustom(id) {
+  if (!_remindersCache[id]) return
+  _remEdit = { type:'custom', id }
+  renderReminders()
+}
+function editReminderNft(groupId) {
+  _remEdit = { type:'nft', groupId }
+  renderReminders()
+}
+function cancelReminderEdit() {
+  _remEdit = null
+  renderReminders()
+}
+
+async function deleteReminderOne(id) {
+  try {
+    await deleteDoc(doc(db, 'reminders', id))
+    delete _remindersCache[id]
+    if (_remEdit?.type === 'custom' && _remEdit.id === id) _remEdit = null
+    renderReminders()
+    toast('Usunięto ✓')
+  } catch (e) { toast('Błąd usuwania: ' + (e?.message||e)) }
+}
+
+async function deleteReminderGroup(groupId) {
+  try {
+    const docs = Object.entries(_remindersCache).filter(([,r]) => r.groupId === groupId)
+    for (const [id] of docs) {
+      await deleteDoc(doc(db, 'reminders', id))
+      delete _remindersCache[id]
+    }
+    if (_remEdit?.type === 'nft' && _remEdit.groupId === groupId) _remEdit = null
+    renderReminders()
+    toast('Usunięto mint ✓')
+  } catch (e) { toast('Błąd usuwania: ' + (e?.message||e)) }
+}
+// ════════════════════════════════════════════════════════════════
 function statusStyle(s) {
   const m = {
     'Nowy':              'background:rgba(0,229,255,.1);color:#00e5ff',
@@ -887,7 +1309,7 @@ function switchTab(name) {
   const pageEl = document.getElementById(`page-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, todo:renderTodo, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools}
+  const fn = {main:renderMain, moje:renderMoje, todo:renderTodo, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools, przypomnienia:loadReminders}
   if (fn[name]) fn[name]()
   // Wiecej — renderuj aktywną podzakładkę
   if (name === 'wiecej') {
@@ -3121,6 +3543,19 @@ function renderAtSettings() {
         <div id="import-status" style="margin-top:10px;font-size:11px;color:var(--neon);display:none"></div>
       </div>
 
+      <!-- 🔔 POWIADOMIENIA PUSH (fundament) -->
+      <div class="form-card">
+        <div class="form-title">🔔 Powiadomienia push</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.6">
+          Push na telefon (Android/Chrome) — działa też przy zamkniętej aplikacji.
+          Włącz powiadomienia na tym urządzeniu, a same przypomnienia dodawaj
+          w zakładce <b>Przypomnienia</b> (między Notatki a Linki ref).
+        </div>
+        <button id="push-enable-btn" class="btn btn-primary" style="width:100%;font-size:13px" onclick="enablePushNotifications()">🔔 Włącz powiadomienia</button>
+        <div id="push-status" style="margin-top:8px;font-size:11px;color:var(--text3)"></div>
+        <button class="btn" style="width:100%;font-size:12px;margin-top:10px" onclick="switchTab('przypomnienia')">📅 Przejdź do Przypomnień</button>
+      </div>
+
       <!-- STATUSY PROJEKTÓW -->
       <div class="form-card">
         <div class="form-title">📋 Statusy projektów</div>
@@ -3308,6 +3743,8 @@ function renderAtSettings() {
       `}
 
     </div>`
+
+  refreshPushBtnState()
 }
 
 function addAtStatus() {
@@ -4162,6 +4599,7 @@ function buildApp() {
       <button class="tab"        data-tab="moje"    onclick="switchTab('moje')">Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
       <button class="tab"        data-tab="todo"    onclick="switchTab('todo')">📋 Daily TODO <span class="tab-badge" id="tab-todo-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
       <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
+      <button class="tab"        data-tab="przypomnienia" onclick="switchTab('przypomnienia')">🔔 Przypomnienia <span class="tab-badge" id="tab-przyp-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
       <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
       <button class="tab"        data-tab="konta"   onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
       <button class="tab"        data-tab="manual"  onclick="switchTab('manual')">✍ Dodaj ręcznie</button>
@@ -4719,6 +5157,11 @@ function buildApp() {
       <div id="notes-cards"></div>
     </div>
 
+    <!-- PRZYPOMNIENIA -->
+    <div id="page-przypomnienia" class="page">
+      <div id="reminders-page"></div>
+    </div>
+
     <!-- LINKI REF -->
     <div id="page-ref" class="page">
       <div class="section-header">
@@ -5135,6 +5578,7 @@ Object.assign(window, {
   exportAllData, importAllData,
   tgToggleSig, tgToggleWpi, tgSelectAllSig, tgSelectAllWpi, tgClearSig, tgClearWpi, tgRejectSig, tgRejectWpi,
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
+  enablePushNotifications, addCustomReminder, addNftReminder, editReminderCustom, editReminderNft, cancelReminderEdit, deleteReminderOne, deleteReminderGroup,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
@@ -5595,6 +6039,10 @@ onAuthStateChanged(auth, async user => {
     updateStats(); updateBadges()
     await syncSheets()
     setInterval(syncSheets, 5 * 60 * 1000)
+    // Push: podepnij toast na pierwszym planie jeśli zgoda już udzielona (bez blokowania ładowania)
+    try { if (typeof Notification !== 'undefined' && Notification.permission === 'granted') setupForegroundPush() } catch(_) {}
+    // Wczytaj przypomnienia w tle (aktualizuje badge zakładki, nie blokuje startu)
+    try { loadReminders() } catch(_) {}
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
