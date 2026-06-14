@@ -1,12 +1,14 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.21
+// Wersja:          v2.22
 // Data:            2026-06-05
-// Zmiany:          Wysłane przypomnienia nie znikają — zostają jako "nieaktywne"
-//                  (wyszarzone, na dole listy). Edycja je reaktywuje (sent=false),
-//                  ręczne usuwanie nadal działa. Badge liczy tylko aktywne.
-// Poprzednia:      v2.20 (Przypomnienia jako osobna zakładka + edycja)
-// Git tag:         v2.21
+// Zmiany:          Nowy pasek zakładek (Wariant 2: ikona nad etykietą, ikony Tabler,
+//                  cyanowe podświetlenie) responsywny: góra na desktopie, dół (fixed)
+//                  na telefonie. Nowa zakładka "Portfel" (między Linki ref a Konta) —
+//                  ręczna księga lokat $ + śledzenie wartości airdropów (claim vs teraz).
+//                  Kolekcja 'positions'. Auto-ukrywanie zerowych badge na pasku.
+// Poprzednia:      v2.21 (Wysłane przypomnienia jako nieaktywne)
+// Git tag:         v2.22
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -1083,6 +1085,283 @@ async function deleteReminderGroup(groupId) {
   } catch (e) { toast('Błąd usuwania: ' + (e?.message||e)) }
 }
 // ════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════
+// PORTFEL — ręczna księga lokat $ + śledzenie wartości airdropów (v2.22)
+// Kolekcja: positions. type: stake|depozyt|lp|airdrop|portfel|inne
+// Bez API — wartości wpisywane ręcznie. Airdrop: wartość przy claimie vs teraz.
+// ════════════════════════════════════════════════════════════════
+let _positionsCache = {}
+let _posEdit = null
+
+const POS_TYPES = [
+  ['stake','Stake'], ['depozyt','Depozyt'], ['lp','LP / Pool'],
+  ['airdrop','Airdrop'], ['portfel','Portfel/Wallet'], ['inne','Inne']
+]
+const POS_STATUS = [['aktywne','Aktywne'], ['sprzedane','Sprzedane'], ['wycofane','Wycofane']]
+
+function fmtUsd(n) {
+  const v = Number(n) || 0
+  return v.toLocaleString('pl-PL', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' $'
+}
+function posIcon(t) {
+  return { stake:'🔒', depozyt:'💵', lp:'🌊', airdrop:'🪂', portfel:'👛', inne:'📦' }[t] || '📦'
+}
+
+async function loadPositions() {
+  try {
+    const snap = await getDocs(query(collection(db, 'positions'), orderBy('createdAt', 'desc')))
+    _positionsCache = {}
+    snap.forEach(d => { _positionsCache[d.id] = d.data() })
+  } catch (e) {
+    console.warn('[portfel] load:', e?.message)
+    _positionsCache = {}
+  }
+  renderPortfel()
+}
+
+function portfelSummary() {
+  let locked = 0, claimVal = 0, nowVal = 0
+  for (const r of Object.values(_positionsCache)) {
+    if (r.status && r.status !== 'aktywne') continue
+    if (r.type === 'airdrop') {
+      claimVal += Number(r.valueAtClaim) || 0
+      nowVal   += Number(r.valueNow) || 0
+    } else {
+      locked += Number(r.amountUsd) || 0
+    }
+  }
+  return { locked, claimVal, nowVal }
+}
+
+function renderPortfel() {
+  const el = document.getElementById('portfel-page')
+  if (!el) return
+  const e = _posEdit ? _positionsCache[_posEdit] : null
+  const s = portfelSummary()
+  const delta = s.nowVal - s.claimVal
+  const deltaPct = s.claimVal > 0 ? Math.round(delta / s.claimVal * 100) : 0
+  const deltaColor = delta >= 0 ? 'var(--neon3)' : 'var(--neon5)'
+
+  el.innerHTML = `
+    <div class="section-header">
+      <span style="font-size:13px;color:var(--text2)">Twoja księga: gdzie są pieniądze + śledzenie wartości airdropów (ręcznie)</span>
+      <button class="btn-add" onclick="exportPositionsCsv()">⬇ Eksport CSV</button>
+    </div>
+
+    <div class="pf-summary">
+      <div class="pf-stat"><div class="pf-stat-lbl">Ulokowane $</div><div class="pf-stat-val">${fmtUsd(s.locked)}</div></div>
+      <div class="pf-stat"><div class="pf-stat-lbl">Airdropy — przy claimie</div><div class="pf-stat-val">${fmtUsd(s.claimVal)}</div></div>
+      <div class="pf-stat"><div class="pf-stat-lbl">Airdropy — teraz</div><div class="pf-stat-val">${fmtUsd(s.nowVal)}</div></div>
+      <div class="pf-stat"><div class="pf-stat-lbl">Zmiana airdropów</div><div class="pf-stat-val" style="color:${deltaColor}">${delta>=0?'+':''}${fmtUsd(delta)} (${deltaPct>=0?'+':''}${deltaPct}%)</div></div>
+    </div>
+
+    <div class="form-card">
+      <div class="form-title">${e ? '✏️ Edytuj pozycję' : '+ Nowa pozycja'}</div>
+      <div class="form-row">
+        <div><div class="form-label">Typ</div>
+          <select class="form-input" id="pos-type">${POS_TYPES.map(([v,l])=>`<option value="${v}" ${e&&e.type===v?'selected':''}>${l}</option>`).join('')}</select></div>
+        <div><div class="form-label">Projekt / miejsce</div>
+          <input class="form-input" id="pos-project" placeholder="np. EigenLayer / Ledger" value="${e?(e.project||'').replace(/"/g,'&quot;'):''}"></div>
+      </div>
+      <div class="form-row">
+        <div><div class="form-label">Sieć (opcjonalnie)</div>
+          <input class="form-input" id="pos-chain" placeholder="np. Base / Arbitrum" value="${e?(e.chain||'').replace(/"/g,'&quot;'):''}"></div>
+        <div><div class="form-label">Data wejścia</div>
+          <input class="form-input" id="pos-date" type="date" value="${e?(e.dateIn||''):''}"></div>
+      </div>
+      <div><div class="form-label">Link (opcjonalnie)</div>
+        <input class="form-input" id="pos-link" placeholder="https://..." value="${e?(e.link||''):''}"></div>
+
+      <div style="border-top:1px solid var(--border);margin:12px 0 10px;padding-top:10px">
+        <div class="form-label" style="color:var(--neon)">💵 Lokata (stake / depozyt / wallet)</div>
+        <div class="form-label">Ile $ wrzuciłem</div>
+        <input class="form-input" id="pos-amount" type="number" step="any" placeholder="np. 500" value="${e&&e.amountUsd!=null?e.amountUsd:''}">
+      </div>
+
+      <div style="border-top:1px solid var(--border);margin:10px 0;padding-top:10px">
+        <div class="form-label" style="color:var(--neon)">🪂 Airdrop (jeśli dotyczy)</div>
+        <div class="form-row">
+          <div><div class="form-label">Token</div>
+            <input class="form-input" id="pos-token" placeholder="np. EIGEN" value="${e?(e.tokenSymbol||''):''}"></div>
+          <div><div class="form-label">Ilość tokenów</div>
+            <input class="form-input" id="pos-tokenamt" type="number" step="any" placeholder="np. 120" value="${e&&e.tokenAmount!=null?e.tokenAmount:''}"></div>
+        </div>
+        <div class="form-row">
+          <div><div class="form-label">Wartość przy otrzymaniu ($)</div>
+            <input class="form-input" id="pos-claimval" type="number" step="any" placeholder="np. 300" value="${e&&e.valueAtClaim!=null?e.valueAtClaim:''}"></div>
+          <div><div class="form-label">Wartość teraz ($)</div>
+            <input class="form-input" id="pos-nowval" type="number" step="any" placeholder="np. 850" value="${e&&e.valueNow!=null?e.valueNow:''}"></div>
+        </div>
+        <div class="form-label">Data sprawdzenia „teraz"</div>
+        <input class="form-input" id="pos-checked" type="date" value="${e?(e.dateChecked||''):''}">
+      </div>
+
+      <div class="form-row">
+        <div><div class="form-label">Status</div>
+          <select class="form-input" id="pos-status">${POS_STATUS.map(([v,l])=>`<option value="${v}" ${e&&e.status===v?'selected':''}>${l}</option>`).join('')}</select></div>
+        <div><div class="form-label">Notatka</div>
+          <input class="form-input" id="pos-note" placeholder="dowolna notatka" value="${e?(e.note||'').replace(/"/g,'&quot;'):''}"></div>
+      </div>
+
+      <div class="form-btns" style="margin-top:10px">
+        <button class="btn btn-primary" onclick="addPosition()">${e ? '💾 Zapisz zmiany' : '+ Dodaj pozycję'}</button>
+        ${e ? `<button class="btn" onclick="cancelPositionEdit()">Anuluj</button>` : ''}
+      </div>
+    </div>
+
+    <div id="positions-list" style="display:flex;flex-direction:column;gap:8px;margin-top:14px"></div>
+  `
+  renderPositionsList()
+}
+
+function renderPositionsList() {
+  const el = document.getElementById('positions-list')
+  if (!el) return
+  const items = Object.entries(_positionsCache)
+    .sort((a,b) => (b[1].createdAt||'').localeCompare(a[1].createdAt||''))
+
+  const badge = document.getElementById('tab-portfel-badge')
+  if (badge) badge.textContent = items.filter(([,r]) => !r.status || r.status === 'aktywne').length
+
+  if (!items.length) {
+    el.innerHTML = `<div style="font-size:12px;color:var(--text3)">Brak pozycji. Dodaj pierwszą wpłatę lub airdrop powyżej.</div>`
+    return
+  }
+
+  el.innerHTML = items.map(([id, r]) => {
+    const inactive = r.status && r.status !== 'aktywne'
+    const isAir = r.type === 'airdrop'
+    let valueLine = ''
+    if (isAir) {
+      const cv = Number(r.valueAtClaim) || 0
+      const nv = Number(r.valueNow)
+      if (r.valueNow != null && r.valueNow !== '' && !isNaN(nv)) {
+        const d = nv - cv
+        const pct = cv > 0 ? Math.round(d / cv * 100) : 0
+        const col = d >= 0 ? 'var(--neon3)' : 'var(--neon5)'
+        const arr = d >= 0 ? '▲' : '▼'
+        valueLine = `<span style="color:var(--text2)">claim ${fmtUsd(cv)} → teraz ${fmtUsd(nv)}</span> <span style="color:${col};font-weight:700">${arr} ${d>=0?'+':''}${pct}%</span>`
+      } else {
+        valueLine = `<span style="color:var(--text2)">claim ${fmtUsd(cv)}</span>`
+      }
+    } else {
+      valueLine = `<span style="color:var(--text);font-weight:700">${fmtUsd(r.amountUsd)}</span> ulokowane`
+    }
+    const meta = [r.chain, r.dateIn, isAir && r.tokenAmount ? `${r.tokenAmount} ${r.tokenSymbol||''}`.trim() : '']
+      .filter(Boolean).join(' · ')
+    const linkChip = r.link ? `<a class="lchip" href="${r.link}" target="_blank" rel="noopener">link</a>` : ''
+    const statusBadge = inactive ? `<span style="font-size:10px;color:var(--text3);border:1px solid var(--border2);border-radius:4px;padding:1px 6px">${r.status}</span>` : ''
+    return `
+      <div style="display:flex;gap:10px;align-items:flex-start;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:10px 13px;${inactive?'opacity:.6':''}">
+        <span style="flex-shrink:0;font-size:18px">${posIcon(r.type)}</span>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:14px;font-weight:700">${(r.project||'(bez nazwy)').replace(/</g,'&lt;')}</span>
+            ${statusBadge}${linkChip}
+          </div>
+          <div style="font-size:12px;margin-top:3px">${valueLine}</div>
+          ${meta ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${meta.replace(/</g,'&lt;')}</div>` : ''}
+          ${r.note ? `<div style="font-size:11px;color:var(--text2);margin-top:3px;font-style:italic">${r.note.replace(/</g,'&lt;')}</div>` : ''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">
+          <button class="btn" style="padding:3px 9px;font-size:12px" onclick="editPosition('${id}')">✏️</button>
+          <button class="btn btn-danger" style="padding:3px 9px;font-size:12px" onclick="deletePosition('${id}')">✕</button>
+        </div>
+      </div>`
+  }).join('')
+}
+
+function readPositionForm() {
+  const val = id => document.getElementById(id)?.value.trim()
+  const num = id => { const v = document.getElementById(id)?.value.trim(); return (v === '' || v == null) ? null : Number(v) }
+  return {
+    type: document.getElementById('pos-type')?.value || 'inne',
+    project: val('pos-project'),
+    chain: val('pos-chain'),
+    dateIn: val('pos-date'),
+    link: val('pos-link'),
+    amountUsd: num('pos-amount'),
+    tokenSymbol: val('pos-token'),
+    tokenAmount: num('pos-tokenamt'),
+    valueAtClaim: num('pos-claimval'),
+    valueNow: num('pos-nowval'),
+    dateChecked: val('pos-checked'),
+    status: document.getElementById('pos-status')?.value || 'aktywne',
+    note: val('pos-note')
+  }
+}
+
+async function addPosition() {
+  const d = readPositionForm()
+  if (!d.project) { toast('Podaj nazwę projektu / miejsca'); return }
+
+  if (_posEdit) {
+    const id = _posEdit
+    await updateDoc(doc(db, 'positions', id), d)
+    Object.assign(_positionsCache[id] || (_positionsCache[id] = {}), d)
+    _posEdit = null
+    renderPortfel()
+    toast('💾 Zapisano ✓')
+    return
+  }
+
+  const id = 'pos_' + uid()
+  const rec = { id, ...d, createdAt: nowStr() }
+  await setDoc(doc(db, 'positions', id), rec)
+  _positionsCache[id] = rec
+  renderPortfel()
+  toast('Dodano pozycję ✓')
+}
+
+function editPosition(id) {
+  if (!_positionsCache[id]) return
+  _posEdit = id
+  renderPortfel()
+  document.getElementById('portfel-page')?.scrollIntoView({ behavior:'smooth', block:'start' })
+}
+function cancelPositionEdit() {
+  _posEdit = null
+  renderPortfel()
+}
+
+async function deletePosition(id) {
+  try {
+    await deleteDoc(doc(db, 'positions', id))
+    delete _positionsCache[id]
+    if (_posEdit === id) _posEdit = null
+    renderPortfel()
+    toast('Usunięto ✓')
+  } catch (e) { toast('Błąd usuwania: ' + (e?.message||e)) }
+}
+
+function exportPositionsCsv() {
+  const rows = Object.values(_positionsCache)
+  if (!rows.length) { toast('Brak danych do eksportu'); return }
+  const cols = ['type','project','chain','dateIn','amountUsd','tokenSymbol','tokenAmount','valueAtClaim','valueNow','dateChecked','status','link','note']
+  const esc = v => { const s = (v==null?'':String(v)); return /[",\n;]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s }
+  const csv = [cols.join(';'), ...rows.map(r => cols.map(c => esc(r[c])).join(';'))].join('\n')
+  const blob = new Blob(['\ufeff'+csv], { type:'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = 'portfel_' + new Date().toISOString().slice(0,10) + '.csv'
+  a.click()
+  URL.revokeObjectURL(a.href)
+  toast('Wyeksportowano CSV ✓')
+}
+
+// Auto-ukrywanie zerowych/pustych badge na głównym pasku (czyściej przy ikona+etykieta)
+function initTabBadgeAutohide() {
+  const tabs = document.querySelector('.tabs')
+  if (!tabs) return
+  const apply = () => tabs.querySelectorAll('.tab-badge').forEach(b => {
+    const v = (b.textContent || '').trim()
+    b.style.display = (!v || v === '0') ? 'none' : 'inline-block'
+  })
+  apply()
+  try { new MutationObserver(apply).observe(tabs, { subtree:true, childList:true, characterData:true }) } catch(_) {}
+}
+// ════════════════════════════════════════════════════════════════
 function statusStyle(s) {
   const m = {
     'Nowy':              'background:rgba(0,229,255,.1);color:#00e5ff',
@@ -1303,7 +1582,7 @@ function switchTab(name) {
   const pageEl = document.getElementById(`page-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, todo:renderTodo, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools, przypomnienia:loadReminders}
+  const fn = {main:renderMain, moje:renderMoje, todo:renderTodo, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools, przypomnienia:loadReminders, portfel:loadPositions}
   if (fn[name]) fn[name]()
   // Wiecej — renderuj aktywną podzakładkę
   if (name === 'wiecej') {
@@ -4589,18 +4868,19 @@ function buildApp() {
     </div>
 
     <div class="tabs">
-      <button class="tab active" data-tab="main"    onclick="switchTab('main')">Wpisy <span class="tab-badge" id="tab-main-badge">0</span></button>
-      <button class="tab"        data-tab="moje"    onclick="switchTab('moje')">Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
-      <button class="tab"        data-tab="todo"    onclick="switchTab('todo')">📋 Daily TODO <span class="tab-badge" id="tab-todo-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
-      <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
-      <button class="tab"        data-tab="przypomnienia" onclick="switchTab('przypomnienia')">🔔 Przypomnienia <span class="tab-badge" id="tab-przyp-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
-      <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
-      <button class="tab"        data-tab="konta"   onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
-      <button class="tab"        data-tab="manual"  onclick="switchTab('manual')">✍ Dodaj ręcznie</button>
-      <button class="tab"        data-tab="airdrop" onclick="switchTab('airdrop')">🪂 Projekty <span class="tab-badge" id="tab-airdrop-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
-      <button class="tab"        data-tab="stats"   onclick="switchTab('stats')">📊 Statystyki</button>
-      <button class="tab"        data-tab="aitools" onclick="switchTab('aitools')">🤖 AI</button>
-      <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">Więcej ▾ <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
+      <button class="tab active" data-tab="main"    onclick="switchTab('main')"><i class="ti ti-news"></i><span class="tab-lbl">Wpisy</span><span class="tab-badge" id="tab-main-badge">0</span></button>
+      <button class="tab"        data-tab="moje"    onclick="switchTab('moje')"><i class="ti ti-pencil"></i><span class="tab-lbl">Moje wpisy</span><span class="tab-badge" id="tab-moje-badge">0</span></button>
+      <button class="tab"        data-tab="todo"    onclick="switchTab('todo')"><i class="ti ti-checklist"></i><span class="tab-lbl">Daily TODO</span><span class="tab-badge" id="tab-todo-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
+      <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')"><i class="ti ti-notes"></i><span class="tab-lbl">Notatki</span><span class="tab-badge" id="tab-notes-badge">0</span></button>
+      <button class="tab"        data-tab="przypomnienia" onclick="switchTab('przypomnienia')"><i class="ti ti-bell"></i><span class="tab-lbl">Przypomnienia</span><span class="tab-badge" id="tab-przyp-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
+      <button class="tab"        data-tab="ref"     onclick="switchTab('ref')"><i class="ti ti-link"></i><span class="tab-lbl">Linki ref</span><span class="tab-badge" id="tab-ref-badge">0</span></button>
+      <button class="tab"        data-tab="portfel" onclick="switchTab('portfel')"><i class="ti ti-wallet"></i><span class="tab-lbl">Portfel</span><span class="tab-badge" id="tab-portfel-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
+      <button class="tab"        data-tab="konta"   onclick="switchTab('konta')"><i class="ti ti-users"></i><span class="tab-lbl">Konta</span><span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
+      <button class="tab"        data-tab="manual"  onclick="switchTab('manual')"><i class="ti ti-plus"></i><span class="tab-lbl">Dodaj ręcznie</span></button>
+      <button class="tab"        data-tab="airdrop" onclick="switchTab('airdrop')"><i class="ti ti-parachute"></i><span class="tab-lbl">Projekty</span><span class="tab-badge" id="tab-airdrop-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
+      <button class="tab"        data-tab="stats"   onclick="switchTab('stats')"><i class="ti ti-chart-bar"></i><span class="tab-lbl">Statystyki</span></button>
+      <button class="tab"        data-tab="aitools" onclick="switchTab('aitools')"><i class="ti ti-robot"></i><span class="tab-lbl">AI</span></button>
+      <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')"><i class="ti ti-dots"></i><span class="tab-lbl">Więcej</span><span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
     </div>
 
     <!-- WPISY -->
@@ -5181,6 +5461,12 @@ function buildApp() {
     </div>
 
   
+    <!-- PORTFEL -->
+    <div id="page-portfel" class="page">
+      <div id="portfel-page"></div>
+    </div>
+
+  
     <!-- KONTA -->
     <div id="page-konta" class="page">
       <div class="section-header">
@@ -5573,6 +5859,7 @@ Object.assign(window, {
   tgToggleSig, tgToggleWpi, tgSelectAllSig, tgSelectAllWpi, tgClearSig, tgClearWpi, tgRejectSig, tgRejectWpi,
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
   enablePushNotifications, addCustomReminder, addNftReminder, editReminderCustom, editReminderNft, cancelReminderEdit, deleteReminderOne, deleteReminderGroup,
+  addPosition, editPosition, cancelPositionEdit, deletePosition, exportPositionsCsv,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
@@ -6037,6 +6324,9 @@ onAuthStateChanged(auth, async user => {
     try { if (typeof Notification !== 'undefined' && Notification.permission === 'granted') setupForegroundPush() } catch(_) {}
     // Wczytaj przypomnienia w tle (aktualizuje badge zakładki, nie blokuje startu)
     try { loadReminders() } catch(_) {}
+    // Wczytaj pozycje Portfela w tle (badge) + auto-ukrywanie zerowych badge na pasku
+    try { loadPositions() } catch(_) {}
+    try { initTabBadgeAutohide() } catch(_) {}
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
