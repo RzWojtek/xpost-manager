@@ -1,14 +1,14 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.22
-// Data:            2026-06-05
-// Zmiany:          Nowy pasek zakładek (Wariant 2: ikona nad etykietą, ikony Tabler,
-//                  cyanowe podświetlenie) responsywny: góra na desktopie, dół (fixed)
-//                  na telefonie. Nowa zakładka "Portfel" (między Linki ref a Konta) —
-//                  ręczna księga lokat $ + śledzenie wartości airdropów (claim vs teraz).
-//                  Kolekcja 'positions'. Auto-ukrywanie zerowych badge na pasku.
-// Poprzednia:      v2.21 (Wysłane przypomnienia jako nieaktywne)
-// Git tag:         v2.22
+// Wersja:          v2.23
+// Data:            2026-06-15
+// Zmiany:          Pasek zakładek PRZYWRÓCONY do starego (czytelnego) wyglądu
+//                  tekst+licznik (cofnięto eksperyment z ikonami). Zakładka Portfel
+//                  PRZEBUDOWANA: osobne formularze zależne od typu (Stake/Depozyt/LP/
+//                  Airdrop/Portfel/Inne), dodawanie wielu portfeli z ilościami,
+//                  auto-suma tokenów i auto-przeliczenia wartości (ilość×cena).
+// Poprzednia:      v2.22 (eksperyment z ikonami w pasku — cofnięty)
+// Git tag:         v2.23
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -1087,65 +1087,60 @@ async function deleteReminderGroup(groupId) {
 // ════════════════════════════════════════════════════════════════
 
 // ════════════════════════════════════════════════════════════════
-// PORTFEL — ręczna księga lokat $ + śledzenie wartości airdropów (v2.22)
+// PORTFEL — księga lokat $ + airdropy (v2.23)
+// Formularze ZALEŻNE OD TYPU. Bez API — wartości ręczne.
 // Kolekcja: positions. type: stake|depozyt|lp|airdrop|portfel|inne
-// Bez API — wartości wpisywane ręcznie. Airdrop: wartość przy claimie vs teraz.
 // ════════════════════════════════════════════════════════════════
 let _positionsCache = {}
 let _posEdit = null
+let _posType = 'stake'
+let _posD = {}                                   // bieżące wartości pól (zachowane przy zmianie typu)
+let _posWallets = [{ address: '', amount: '' }]  // portfele dla airdrop / portfel
 
 const POS_TYPES = [
   ['stake','Stake'], ['depozyt','Depozyt'], ['lp','LP / Pool'],
   ['airdrop','Airdrop'], ['portfel','Portfel/Wallet'], ['inne','Inne']
 ]
-const POS_STATUS = [['aktywne','Aktywne'], ['sprzedane','Sprzedane'], ['wycofane','Wycofane']]
+const POS_STATUS = [['aktywne','Aktywne'], ['sprzedane','Sprzedane'], ['wycofane','Wycofane'], ['zakonczone','Zakończone']]
+const SIMPLE_TYPES = ['stake','depozyt','lp','inne']
 
-function fmtUsd(n) {
-  const v = Number(n) || 0
-  return v.toLocaleString('pl-PL', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' $'
-}
-function posIcon(t) {
-  return { stake:'🔒', depozyt:'💵', lp:'🌊', airdrop:'🪂', portfel:'👛', inne:'📦' }[t] || '📦'
-}
+function fmtUsd(n){ const v=Number(n)||0; return v.toLocaleString('pl-PL',{minimumFractionDigits:0,maximumFractionDigits:2})+' $' }
+function fmtNum(n){ const v=Number(n)||0; return v.toLocaleString('pl-PL',{maximumFractionDigits:6}) }
+function posIcon(t){ return {stake:'🔒',depozyt:'💵',lp:'🌊',airdrop:'🪂',portfel:'👛',inne:'📦'}[t]||'📦' }
+function posTypeLabel(t){ const x=POS_TYPES.find(p=>p[0]===t); return x?x[1]:t }
+function _pv(k){ return (_posD[k]==null?'':_posD[k]).toString().replace(/"/g,'&quot;') }
 
-async function loadPositions() {
-  try {
-    const snap = await getDocs(query(collection(db, 'positions'), orderBy('createdAt', 'desc')))
-    _positionsCache = {}
-    snap.forEach(d => { _positionsCache[d.id] = d.data() })
-  } catch (e) {
-    console.warn('[portfel] load:', e?.message)
-    _positionsCache = {}
-  }
+async function loadPositions(){
+  try{
+    const snap=await getDocs(query(collection(db,'positions'),orderBy('createdAt','desc')))
+    _positionsCache={}; snap.forEach(d=>{ _positionsCache[d.id]=d.data() })
+  }catch(e){ console.warn('[portfel] load:',e?.message); _positionsCache={} }
   renderPortfel()
 }
 
-function portfelSummary() {
-  let locked = 0, claimVal = 0, nowVal = 0
-  for (const r of Object.values(_positionsCache)) {
-    if (r.status && r.status !== 'aktywne') continue
-    if (r.type === 'airdrop') {
-      claimVal += Number(r.valueAtClaim) || 0
-      nowVal   += Number(r.valueNow) || 0
-    } else {
-      locked += Number(r.amountUsd) || 0
-    }
+function portfelSummary(){
+  let locked=0, claimVal=0, nowVal=0
+  for(const r of Object.values(_positionsCache)){
+    if(r.status && r.status!=='aktywne') continue
+    if(r.type==='airdrop'){ claimVal+=Number(r.valueAtClaim)||0; nowVal+=Number(r.valueNow)||0 }
+    else if(r.type!=='portfel'){ locked+=Number(r.amountUsd)||0 }
   }
   return { locked, claimVal, nowVal }
 }
 
-function renderPortfel() {
-  const el = document.getElementById('portfel-page')
-  if (!el) return
-  const e = _posEdit ? _positionsCache[_posEdit] : null
-  const s = portfelSummary()
-  const delta = s.nowVal - s.claimVal
-  const deltaPct = s.claimVal > 0 ? Math.round(delta / s.claimVal * 100) : 0
-  const deltaColor = delta >= 0 ? 'var(--neon3)' : 'var(--neon5)'
+function walletsSum(){ return _posWallets.reduce((s,w)=>s+(Number(w.amount)||0),0) }
 
-  el.innerHTML = `
+// ── render całej zakładki ────────────────────────────────────────
+function renderPortfel(){
+  const el=document.getElementById('portfel-page'); if(!el) return
+  const s=portfelSummary()
+  const delta=s.nowVal-s.claimVal
+  const dPct=s.claimVal>0?Math.round(delta/s.claimVal*100):0
+  const dCol=delta>=0?'var(--neon3)':'var(--neon5)'
+
+  el.innerHTML=`
     <div class="section-header">
-      <span style="font-size:13px;color:var(--text2)">Twoja księga: gdzie są pieniądze + śledzenie wartości airdropów (ręcznie)</span>
+      <span style="font-size:13px;color:var(--text2)">Twoja księga: gdzie są pieniądze + airdropy (ręcznie)</span>
       <button class="btn-add" onclick="exportPositionsCsv()">⬇ Eksport CSV</button>
     </div>
 
@@ -1153,116 +1148,204 @@ function renderPortfel() {
       <div class="pf-stat"><div class="pf-stat-lbl">Ulokowane $</div><div class="pf-stat-val">${fmtUsd(s.locked)}</div></div>
       <div class="pf-stat"><div class="pf-stat-lbl">Airdropy — przy claimie</div><div class="pf-stat-val">${fmtUsd(s.claimVal)}</div></div>
       <div class="pf-stat"><div class="pf-stat-lbl">Airdropy — teraz</div><div class="pf-stat-val">${fmtUsd(s.nowVal)}</div></div>
-      <div class="pf-stat"><div class="pf-stat-lbl">Zmiana airdropów</div><div class="pf-stat-val" style="color:${deltaColor}">${delta>=0?'+':''}${fmtUsd(delta)} (${deltaPct>=0?'+':''}${deltaPct}%)</div></div>
+      <div class="pf-stat"><div class="pf-stat-lbl">Zmiana airdropów</div><div class="pf-stat-val" style="color:${dCol}">${delta>=0?'+':''}${fmtUsd(delta)} (${dPct>=0?'+':''}${dPct}%)</div></div>
     </div>
 
     <div class="form-card">
-      <div class="form-title">${e ? '✏️ Edytuj pozycję' : '+ Nowa pozycja'}</div>
-      <div class="form-row">
-        <div><div class="form-label">Typ</div>
-          <select class="form-input" id="pos-type">${POS_TYPES.map(([v,l])=>`<option value="${v}" ${e&&e.type===v?'selected':''}>${l}</option>`).join('')}</select></div>
-        <div><div class="form-label">Projekt / miejsce</div>
-          <input class="form-input" id="pos-project" placeholder="np. EigenLayer / Ledger" value="${e?(e.project||'').replace(/"/g,'&quot;'):''}"></div>
+      <div class="form-title">${_posEdit?'✏️ Edytuj pozycję':'+ Nowa pozycja'}</div>
+      <div style="margin-bottom:10px"><div class="form-label">Typ</div>
+        <select class="form-input" id="pos-type" onchange="switchPosType(this.value)">
+          ${POS_TYPES.map(([x,l])=>`<option value="${x}" ${_posType===x?'selected':''}>${l}</option>`).join('')}
+        </select>
       </div>
-      <div class="form-row">
-        <div><div class="form-label">Sieć (opcjonalnie)</div>
-          <input class="form-input" id="pos-chain" placeholder="np. Base / Arbitrum" value="${e?(e.chain||'').replace(/"/g,'&quot;'):''}"></div>
-        <div><div class="form-label">Data wejścia</div>
-          <input class="form-input" id="pos-date" type="date" value="${e?(e.dateIn||''):''}"></div>
-      </div>
-      <div><div class="form-label">Link (opcjonalnie)</div>
-        <input class="form-input" id="pos-link" placeholder="https://..." value="${e?(e.link||''):''}"></div>
-
-      <div style="border-top:1px solid var(--border);margin:12px 0 10px;padding-top:10px">
-        <div class="form-label" style="color:var(--neon)">💵 Lokata (stake / depozyt / wallet)</div>
-        <div class="form-label">Ile $ wrzuciłem</div>
-        <input class="form-input" id="pos-amount" type="number" step="any" placeholder="np. 500" value="${e&&e.amountUsd!=null?e.amountUsd:''}">
-      </div>
-
-      <div style="border-top:1px solid var(--border);margin:10px 0;padding-top:10px">
-        <div class="form-label" style="color:var(--neon)">🪂 Airdrop (jeśli dotyczy)</div>
-        <div class="form-row">
-          <div><div class="form-label">Token</div>
-            <input class="form-input" id="pos-token" placeholder="np. EIGEN" value="${e?(e.tokenSymbol||''):''}"></div>
-          <div><div class="form-label">Ilość tokenów</div>
-            <input class="form-input" id="pos-tokenamt" type="number" step="any" placeholder="np. 120" value="${e&&e.tokenAmount!=null?e.tokenAmount:''}"></div>
-        </div>
-        <div class="form-row">
-          <div><div class="form-label">Wartość przy otrzymaniu ($)</div>
-            <input class="form-input" id="pos-claimval" type="number" step="any" placeholder="np. 300" value="${e&&e.valueAtClaim!=null?e.valueAtClaim:''}"></div>
-          <div><div class="form-label">Wartość teraz ($)</div>
-            <input class="form-input" id="pos-nowval" type="number" step="any" placeholder="np. 850" value="${e&&e.valueNow!=null?e.valueNow:''}"></div>
-        </div>
-        <div class="form-label">Data sprawdzenia „teraz"</div>
-        <input class="form-input" id="pos-checked" type="date" value="${e?(e.dateChecked||''):''}">
-      </div>
-
-      <div class="form-row">
-        <div><div class="form-label">Status</div>
-          <select class="form-input" id="pos-status">${POS_STATUS.map(([v,l])=>`<option value="${v}" ${e&&e.status===v?'selected':''}>${l}</option>`).join('')}</select></div>
-        <div><div class="form-label">Notatka</div>
-          <input class="form-input" id="pos-note" placeholder="dowolna notatka" value="${e?(e.note||'').replace(/"/g,'&quot;'):''}"></div>
-      </div>
-
-      <div class="form-btns" style="margin-top:10px">
-        <button class="btn btn-primary" onclick="addPosition()">${e ? '💾 Zapisz zmiany' : '+ Dodaj pozycję'}</button>
-        ${e ? `<button class="btn" onclick="cancelPositionEdit()">Anuluj</button>` : ''}
+      <div id="pos-form-fields">${buildPosFields()}</div>
+      <div class="form-btns" style="margin-top:12px">
+        <button class="btn btn-primary" onclick="savePosition()">${_posEdit?'💾 Zapisz zmiany':'+ Dodaj pozycję'}</button>
+        ${_posEdit?`<button class="btn" onclick="cancelPositionEdit()">Anuluj</button>`:''}
       </div>
     </div>
 
     <div id="positions-list" style="display:flex;flex-direction:column;gap:8px;margin-top:14px"></div>
   `
   renderPositionsList()
+  if(_posType==='airdrop'||_posType==='portfel') recalcAirdrop()
 }
 
-function renderPositionsList() {
-  const el = document.getElementById('positions-list')
-  if (!el) return
-  const items = Object.entries(_positionsCache)
-    .sort((a,b) => (b[1].createdAt||'').localeCompare(a[1].createdAt||''))
+// ── budowa pól zależnych od typu ─────────────────────────────────
+function _linksBlock(){
+  return `<div class="form-row">
+    <div><div class="form-label">Link do projektu</div><input class="form-input" id="pos-link" placeholder="https://..." value="${_pv('link')}"></div>
+    <div><div class="form-label">Link do X / Telegrama</div><input class="form-input" id="pos-social" placeholder="https://..." value="${_pv('linkSocial')}"></div>
+  </div>`
+}
+function _statusNote(){
+  return `<div class="form-row">
+    <div><div class="form-label">Status</div><select class="form-input" id="pos-status">${POS_STATUS.map(([x,l])=>`<option value="${x}" ${_posD.status===x?'selected':''}>${l}</option>`).join('')}</select></div>
+    <div><div class="form-label">Notatka</div><input class="form-input" id="pos-note" placeholder="dowolna notatka" value="${_pv('note')}"></div>
+  </div>`
+}
+function buildWalletRows(isAir){
+  return _posWallets.map((w,i)=>`
+    <div class="pos-wrow" style="display:flex;gap:6px;margin-bottom:6px">
+      <input class="form-input pos-waddr" placeholder="adres 0x..." value="${(w.address||'').replace(/"/g,'&quot;')}" style="flex:2">
+      <input class="form-input pos-wamt" type="number" step="any" placeholder="${isAir?'ilość tokenów':'ilość'}" value="${w.amount==null?'':w.amount}" oninput="recalcAirdrop()" style="flex:1">
+      <button class="btn btn-danger" style="padding:0 10px;flex-shrink:0" onclick="removeWalletRow(${i})">✕</button>
+    </div>`).join('')
+}
 
-  const badge = document.getElementById('tab-portfel-badge')
-  if (badge) badge.textContent = items.filter(([,r]) => !r.status || r.status === 'aktywne').length
-
-  if (!items.length) {
-    el.innerHTML = `<div style="font-size:12px;color:var(--text3)">Brak pozycji. Dodaj pierwszą wpłatę lub airdrop powyżej.</div>`
-    return
+function buildPosFields(){
+  const t=_posType
+  if(SIMPLE_TYPES.includes(t)){
+    return `
+      <div class="form-row">
+        <div><div class="form-label">Projekt / miejsce</div><input class="form-input" id="pos-project" placeholder="np. EigenLayer" value="${_pv('project')}"></div>
+        <div><div class="form-label">Ile $ wrzuciłem</div><input class="form-input" id="pos-amount" type="number" step="any" placeholder="np. 500" value="${_pv('amountUsd')}"></div>
+      </div>
+      <div class="form-row">
+        <div><div class="form-label">Sieć</div><input class="form-input" id="pos-chain" placeholder="np. Base / Arbitrum" value="${_pv('chain')}"></div>
+        <div><div class="form-label">Data wejścia</div><input class="form-input" id="pos-date" type="date" value="${_pv('dateIn')}"></div>
+      </div>
+      <div><div class="form-label">Data planowanego wyjścia / wyjścia</div><input class="form-input" id="pos-dateout" type="date" value="${_pv('dateOut')}"></div>
+      ${_linksBlock()}${_statusNote()}`
   }
+  if(t==='airdrop'){
+    return `
+      <div class="form-row">
+        <div><div class="form-label">Projekt / miejsce</div><input class="form-input" id="pos-project" placeholder="np. EigenLayer" value="${_pv('project')}"></div>
+        <div><div class="form-label">Sieć (opcjonalnie)</div><input class="form-input" id="pos-chain" placeholder="np. Ethereum" value="${_pv('chain')}"></div>
+      </div>
+      <div class="form-row">
+        <div><div class="form-label">Data otrzymania airdropu</div><input class="form-input" id="pos-datercv" type="date" value="${_pv('dateReceived')}"></div>
+        <div><div class="form-label">Token</div><input class="form-input" id="pos-token" placeholder="np. EIGEN" value="${_pv('tokenSymbol')}"></div>
+      </div>
+      <div class="form-label" style="color:var(--neon);margin-top:8px">Portfele i otrzymane tokeny</div>
+      <div id="pos-wallets">${buildWalletRows(true)}</div>
+      <button class="btn" style="font-size:12px;margin:2px 0 8px" onclick="addWalletRow()">+ Dodaj portfel</button>
+      <div class="pf-calc">Suma tokenów: <b id="calc-total">0</b></div>
+      <div class="form-row">
+        <div><div class="form-label">Wartość 1 tokena w dniu otrzymania ($)</div><input class="form-input" id="pos-claimprice" type="number" step="any" placeholder="np. 2.5" value="${_pv('valuePerTokenAtClaim')}" oninput="recalcAirdrop()"></div>
+        <div><div class="form-label">Wartość przy otrzymaniu (auto)</div><input class="form-input" id="calc-claimval" readonly tabindex="-1" style="background:var(--bg3)"></div>
+      </div>
+      <div class="form-row">
+        <div><div class="form-label">Wartość 1 tokena teraz ($)</div><input class="form-input" id="pos-nowprice" type="number" step="any" placeholder="np. 7" value="${_pv('valuePerTokenNow')}" oninput="recalcAirdrop()"></div>
+        <div><div class="form-label">Wartość teraz (auto)</div><input class="form-input" id="calc-nowval" readonly tabindex="-1" style="background:var(--bg3)"></div>
+      </div>
+      ${_linksBlock()}${_statusNote()}`
+  }
+  if(t==='portfel'){
+    return `
+      <div class="form-row">
+        <div><div class="form-label">Nazwa portfela</div><input class="form-input" id="pos-project" placeholder="np. Main MetaMask" value="${_pv('project')}"></div>
+        <div><div class="form-label">Sieć</div><input class="form-input" id="pos-chain" placeholder="np. Base" value="${_pv('chain')}"></div>
+      </div>
+      <div class="form-label" style="color:var(--neon);margin-top:8px">Adresy i ilości (tokeny / $)</div>
+      <div id="pos-wallets">${buildWalletRows(false)}</div>
+      <button class="btn" style="font-size:12px;margin:2px 0 8px" onclick="addWalletRow()">+ Dodaj adres</button>
+      <div class="pf-calc">Suma: <b id="calc-total">0</b></div>
+      <div><div class="form-label">Data przesłania</div><input class="form-input" id="pos-datesent" type="date" value="${_pv('dateSent')}"></div>
+      ${_linksBlock()}${_statusNote()}`
+  }
+  return ''
+}
 
-  el.innerHTML = items.map(([id, r]) => {
-    const inactive = r.status && r.status !== 'aktywne'
-    const isAir = r.type === 'airdrop'
-    let valueLine = ''
-    if (isAir) {
-      const cv = Number(r.valueAtClaim) || 0
-      const nv = Number(r.valueNow)
-      if (r.valueNow != null && r.valueNow !== '' && !isNaN(nv)) {
-        const d = nv - cv
-        const pct = cv > 0 ? Math.round(d / cv * 100) : 0
-        const col = d >= 0 ? 'var(--neon3)' : 'var(--neon5)'
-        const arr = d >= 0 ? '▲' : '▼'
-        valueLine = `<span style="color:var(--text2)">claim ${fmtUsd(cv)} → teraz ${fmtUsd(nv)}</span> <span style="color:${col};font-weight:700">${arr} ${d>=0?'+':''}${pct}%</span>`
+// ── przechwycenie wartości z DOM do _posD / _posWallets ──────────
+function capturePosForm(){
+  const g=id=>document.getElementById(id)
+  const set=(k,id)=>{ const e=g(id); if(e) _posD[k]=e.value }
+  set('project','pos-project'); set('chain','pos-chain')
+  set('dateIn','pos-date'); set('dateOut','pos-dateout')
+  set('dateReceived','pos-datercv'); set('dateSent','pos-datesent')
+  set('amountUsd','pos-amount'); set('tokenSymbol','pos-token')
+  set('valuePerTokenAtClaim','pos-claimprice'); set('valuePerTokenNow','pos-nowprice')
+  set('link','pos-link'); set('linkSocial','pos-social')
+  set('status','pos-status'); set('note','pos-note')
+  const rows=document.querySelectorAll('#pos-wallets .pos-wrow')
+  if(rows.length){
+    _posWallets=Array.from(rows).map(r=>({
+      address:r.querySelector('.pos-waddr')?.value||'',
+      amount:r.querySelector('.pos-wamt')?.value||''
+    }))
+  }
+}
+
+function rerenderPosFields(){
+  const c=document.getElementById('pos-form-fields')
+  if(c){ c.innerHTML=buildPosFields() ; if(_posType==='airdrop'||_posType==='portfel') recalcAirdrop() }
+}
+
+function switchPosType(t){
+  capturePosForm(); _posType=t
+  if((t==='airdrop'||t==='portfel') && !_posWallets.length) _posWallets=[{address:'',amount:''}]
+  rerenderPosFields()
+}
+function addWalletRow(){
+  capturePosForm(); _posWallets.push({address:'',amount:''}); rerenderPosFields()
+}
+function removeWalletRow(i){
+  capturePosForm(); _posWallets.splice(i,1)
+  if(!_posWallets.length) _posWallets=[{address:'',amount:''}]
+  rerenderPosFields()
+}
+
+// ── auto-przeliczenia (bez re-renderu, bez utraty fokusa) ────────
+function recalcAirdrop(){
+  let total=0
+  document.querySelectorAll('#pos-wallets .pos-wamt').forEach(e=>{ total+=Number(e.value)||0 })
+  const t=document.getElementById('calc-total'); if(t) t.textContent=fmtNum(total)
+  const cp=Number(document.getElementById('pos-claimprice')?.value)||0
+  const np=Number(document.getElementById('pos-nowprice')?.value)||0
+  const cv=document.getElementById('calc-claimval'); if(cv) cv.value=fmtUsd(total*cp)
+  const nv=document.getElementById('calc-nowval'); if(nv) nv.value=fmtUsd(total*np)
+}
+
+// ── lista pozycji ────────────────────────────────────────────────
+function renderPositionsList(){
+  const el=document.getElementById('positions-list'); if(!el) return
+  const items=Object.entries(_positionsCache).sort((a,b)=>(b[1].createdAt||'').localeCompare(a[1].createdAt||''))
+
+  const badge=document.getElementById('tab-portfel-badge')
+  if(badge) badge.textContent=items.filter(([,r])=>!r.status||r.status==='aktywne').length
+
+  if(!items.length){ el.innerHTML=`<div style="font-size:12px;color:var(--text3)">Brak pozycji. Dodaj pierwszą powyżej.</div>`; return }
+
+  el.innerHTML=items.map(([id,r])=>{
+    const inactive=r.status&&r.status!=='aktywne'
+    let valueLine=''
+    if(r.type==='airdrop'){
+      const cv=Number(r.valueAtClaim)||0, nv=Number(r.valueNow)
+      const tok=`${fmtNum(r.totalTokens)} ${r.tokenSymbol||''}`.trim()
+      if(r.valueNow!=null&&r.valueNow!==''&&!isNaN(nv)){
+        const d=nv-cv, pct=cv>0?Math.round(d/cv*100):0
+        const col=d>=0?'var(--neon3)':'var(--neon5)', arr=d>=0?'▲':'▼'
+        valueLine=`<span style="color:var(--text2)">${tok} · claim ${fmtUsd(cv)} → teraz ${fmtUsd(nv)}</span> <span style="color:${col};font-weight:700">${arr} ${d>=0?'+':''}${pct}%</span>`
       } else {
-        valueLine = `<span style="color:var(--text2)">claim ${fmtUsd(cv)}</span>`
+        valueLine=`<span style="color:var(--text2)">${tok} · claim ${fmtUsd(cv)}</span>`
       }
+    } else if(r.type==='portfel'){
+      const n=(r.wallets||[]).length
+      valueLine=`<span style="color:var(--text);font-weight:700">${fmtNum(r.totalAmount)}</span> <span style="color:var(--text3)">(${n} ${n===1?'adres':'adresów'})</span>`
     } else {
-      valueLine = `<span style="color:var(--text);font-weight:700">${fmtUsd(r.amountUsd)}</span> ulokowane`
+      valueLine=`<span style="color:var(--text);font-weight:700">${fmtUsd(r.amountUsd)}</span> ulokowane`
     }
-    const meta = [r.chain, r.dateIn, isAir && r.tokenAmount ? `${r.tokenAmount} ${r.tokenSymbol||''}`.trim() : '']
-      .filter(Boolean).join(' · ')
-    const linkChip = r.link ? `<a class="lchip" href="${r.link}" target="_blank" rel="noopener">link</a>` : ''
-    const statusBadge = inactive ? `<span style="font-size:10px;color:var(--text3);border:1px solid var(--border2);border-radius:4px;padding:1px 6px">${r.status}</span>` : ''
+    const dates=[r.dateIn,r.dateReceived,r.dateSent].filter(Boolean)[0]
+    const dateOut=r.dateOut?` → ${r.dateOut}`:''
+    const meta=[posTypeLabel(r.type),r.chain,dates?dates+dateOut:''].filter(Boolean).join(' · ')
+    const chips=[
+      r.link?`<a class="lchip" href="${r.link}" target="_blank" rel="noopener">projekt</a>`:'',
+      r.linkSocial?`<a class="lchip" href="${r.linkSocial}" target="_blank" rel="noopener">X/TG</a>`:''
+    ].join(' ')
+    const statusBadge=inactive?`<span style="font-size:10px;color:var(--text3);border:1px solid var(--border2);border-radius:4px;padding:1px 6px">${r.status}</span>`:''
     return `
       <div style="display:flex;gap:10px;align-items:flex-start;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:10px 13px;${inactive?'opacity:.6':''}">
         <span style="flex-shrink:0;font-size:18px">${posIcon(r.type)}</span>
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <span style="font-size:14px;font-weight:700">${(r.project||'(bez nazwy)').replace(/</g,'&lt;')}</span>
-            ${statusBadge}${linkChip}
+            ${statusBadge}${chips}
           </div>
           <div style="font-size:12px;margin-top:3px">${valueLine}</div>
-          ${meta ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${meta.replace(/</g,'&lt;')}</div>` : ''}
-          ${r.note ? `<div style="font-size:11px;color:var(--text2);margin-top:3px;font-style:italic">${r.note.replace(/</g,'&lt;')}</div>` : ''}
+          ${meta?`<div style="font-size:11px;color:var(--text3);margin-top:2px">${meta.replace(/</g,'&lt;')}</div>`:''}
+          ${r.note?`<div style="font-size:11px;color:var(--text2);margin-top:3px;font-style:italic">${r.note.replace(/</g,'&lt;')}</div>`:''}
         </div>
         <div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">
           <button class="btn" style="padding:3px 9px;font-size:12px" onclick="editPosition('${id}')">✏️</button>
@@ -1272,94 +1355,100 @@ function renderPositionsList() {
   }).join('')
 }
 
-function readPositionForm() {
-  const val = id => document.getElementById(id)?.value.trim()
-  const num = id => { const v = document.getElementById(id)?.value.trim(); return (v === '' || v == null) ? null : Number(v) }
-  return {
-    type: document.getElementById('pos-type')?.value || 'inne',
-    project: val('pos-project'),
-    chain: val('pos-chain'),
-    dateIn: val('pos-date'),
-    link: val('pos-link'),
-    amountUsd: num('pos-amount'),
-    tokenSymbol: val('pos-token'),
-    tokenAmount: num('pos-tokenamt'),
-    valueAtClaim: num('pos-claimval'),
-    valueNow: num('pos-nowval'),
-    dateChecked: val('pos-checked'),
-    status: document.getElementById('pos-status')?.value || 'aktywne',
-    note: val('pos-note')
+// ── zapis / edycja / usuwanie ────────────────────────────────────
+function resetPosForm(){ _posD={}; _posWallets=[{address:'',amount:''}] }
+
+async function savePosition(){
+  capturePosForm()
+  const d=_posD
+  const proj=(d.project||'').trim()
+  if(!proj){ toast('Podaj nazwę projektu / portfela'); return }
+
+  const rec={
+    type:_posType, status:d.status||'aktywne', note:(d.note||'').trim(),
+    project:proj, chain:(d.chain||'').trim(),
+    link:(d.link||'').trim(), linkSocial:(d.linkSocial||'').trim()
   }
-}
+  if(SIMPLE_TYPES.includes(_posType)){
+    rec.amountUsd=(d.amountUsd!==''&&d.amountUsd!=null)?Number(d.amountUsd):null
+    rec.dateIn=d.dateIn||''; rec.dateOut=d.dateOut||''
+  } else if(_posType==='airdrop'){
+    const total=walletsSum()
+    const cp=Number(d.valuePerTokenAtClaim)||0, np=Number(d.valuePerTokenNow)||0
+    rec.dateReceived=d.dateReceived||''
+    rec.tokenSymbol=(d.tokenSymbol||'').trim()
+    rec.wallets=_posWallets.filter(w=>(w.address||'')!==''||(w.amount||'')!=='').map(w=>({address:w.address||'',amount:(w.amount===''||w.amount==null)?null:Number(w.amount)}))
+    rec.totalTokens=total
+    rec.valuePerTokenAtClaim=cp; rec.valuePerTokenNow=np
+    rec.valueAtClaim=total*cp; rec.valueNow=total*np
+  } else if(_posType==='portfel'){
+    rec.dateSent=d.dateSent||''
+    rec.wallets=_posWallets.filter(w=>(w.address||'')!==''||(w.amount||'')!=='').map(w=>({address:w.address||'',amount:(w.amount===''||w.amount==null)?null:Number(w.amount)}))
+    rec.totalAmount=walletsSum()
+  }
 
-async function addPosition() {
-  const d = readPositionForm()
-  if (!d.project) { toast('Podaj nazwę projektu / miejsca'); return }
-
-  if (_posEdit) {
-    const id = _posEdit
-    await updateDoc(doc(db, 'positions', id), d)
-    Object.assign(_positionsCache[id] || (_positionsCache[id] = {}), d)
-    _posEdit = null
+  try{
+    if(_posEdit){
+      await updateDoc(doc(db,'positions',_posEdit),rec)
+      _positionsCache[_posEdit]=Object.assign(_positionsCache[_posEdit]||{},rec)
+      _posEdit=null
+      toast('💾 Zapisano ✓')
+    } else {
+      const id='pos_'+uid()
+      rec.id=id; rec.createdAt=nowStr()
+      await setDoc(doc(db,'positions',id),rec)
+      _positionsCache[id]=rec
+      toast('Dodano pozycję ✓')
+    }
+    resetPosForm()
     renderPortfel()
-    toast('💾 Zapisano ✓')
-    return
+  }catch(e){ toast('Błąd zapisu: '+(e?.message||e)) }
+}
+
+function editPosition(id){
+  const r=_positionsCache[id]; if(!r) return
+  _posEdit=id; _posType=r.type||'stake'
+  _posD={
+    project:r.project||'', chain:r.chain||'',
+    dateIn:r.dateIn||'', dateOut:r.dateOut||'', dateReceived:r.dateReceived||'', dateSent:r.dateSent||'',
+    amountUsd:r.amountUsd==null?'':r.amountUsd, tokenSymbol:r.tokenSymbol||'',
+    valuePerTokenAtClaim:r.valuePerTokenAtClaim==null?'':r.valuePerTokenAtClaim,
+    valuePerTokenNow:r.valuePerTokenNow==null?'':r.valuePerTokenNow,
+    link:r.link||'', linkSocial:r.linkSocial||'', status:r.status||'aktywne', note:r.note||''
   }
-
-  const id = 'pos_' + uid()
-  const rec = { id, ...d, createdAt: nowStr() }
-  await setDoc(doc(db, 'positions', id), rec)
-  _positionsCache[id] = rec
+  _posWallets=(r.wallets&&r.wallets.length)?r.wallets.map(w=>({address:w.address||'',amount:w.amount==null?'':w.amount})):[{address:'',amount:''}]
   renderPortfel()
-  toast('Dodano pozycję ✓')
+  document.getElementById('portfel-page')?.scrollIntoView({behavior:'smooth',block:'start'})
 }
 
-function editPosition(id) {
-  if (!_positionsCache[id]) return
-  _posEdit = id
-  renderPortfel()
-  document.getElementById('portfel-page')?.scrollIntoView({ behavior:'smooth', block:'start' })
-}
-function cancelPositionEdit() {
-  _posEdit = null
-  renderPortfel()
-}
+function cancelPositionEdit(){ _posEdit=null; resetPosForm(); renderPortfel() }
 
-async function deletePosition(id) {
-  try {
-    await deleteDoc(doc(db, 'positions', id))
+async function deletePosition(id){
+  try{
+    await deleteDoc(doc(db,'positions',id))
     delete _positionsCache[id]
-    if (_posEdit === id) _posEdit = null
+    if(_posEdit===id){ _posEdit=null; resetPosForm() }
     renderPortfel()
     toast('Usunięto ✓')
-  } catch (e) { toast('Błąd usuwania: ' + (e?.message||e)) }
+  }catch(e){ toast('Błąd usuwania: '+(e?.message||e)) }
 }
 
-function exportPositionsCsv() {
-  const rows = Object.values(_positionsCache)
-  if (!rows.length) { toast('Brak danych do eksportu'); return }
-  const cols = ['type','project','chain','dateIn','amountUsd','tokenSymbol','tokenAmount','valueAtClaim','valueNow','dateChecked','status','link','note']
-  const esc = v => { const s = (v==null?'':String(v)); return /[",\n;]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s }
-  const csv = [cols.join(';'), ...rows.map(r => cols.map(c => esc(r[c])).join(';'))].join('\n')
-  const blob = new Blob(['\ufeff'+csv], { type:'text/csv;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = 'portfel_' + new Date().toISOString().slice(0,10) + '.csv'
-  a.click()
-  URL.revokeObjectURL(a.href)
+function exportPositionsCsv(){
+  const rows=Object.values(_positionsCache)
+  if(!rows.length){ toast('Brak danych do eksportu'); return }
+  const cols=['type','project','chain','dateIn','dateOut','dateReceived','dateSent','amountUsd','tokenSymbol','totalTokens','valuePerTokenAtClaim','valuePerTokenNow','valueAtClaim','valueNow','totalAmount','status','link','linkSocial','wallets','note']
+  const esc=v=>{ const s=(v==null?'':String(v)); return /[",\n;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s }
+  const ser=r=>cols.map(c=>{
+    if(c==='wallets') return esc((r.wallets||[]).map(w=>`${w.address||''}=${w.amount==null?'':w.amount}`).join('|'))
+    return esc(r[c])
+  }).join(';')
+  const csv=[cols.join(';'), ...rows.map(ser)].join('\n')
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'})
+  const a=document.createElement('a')
+  a.href=URL.createObjectURL(blob)
+  a.download='portfel_'+new Date().toISOString().slice(0,10)+'.csv'
+  a.click(); URL.revokeObjectURL(a.href)
   toast('Wyeksportowano CSV ✓')
-}
-
-// Auto-ukrywanie zerowych/pustych badge na głównym pasku (czyściej przy ikona+etykieta)
-function initTabBadgeAutohide() {
-  const tabs = document.querySelector('.tabs')
-  if (!tabs) return
-  const apply = () => tabs.querySelectorAll('.tab-badge').forEach(b => {
-    const v = (b.textContent || '').trim()
-    b.style.display = (!v || v === '0') ? 'none' : 'inline-block'
-  })
-  apply()
-  try { new MutationObserver(apply).observe(tabs, { subtree:true, childList:true, characterData:true }) } catch(_) {}
 }
 // ════════════════════════════════════════════════════════════════
 function statusStyle(s) {
@@ -4868,19 +4957,19 @@ function buildApp() {
     </div>
 
     <div class="tabs">
-      <button class="tab active" data-tab="main"    onclick="switchTab('main')"><i class="ti ti-news"></i><span class="tab-lbl">Wpisy</span><span class="tab-badge" id="tab-main-badge">0</span></button>
-      <button class="tab"        data-tab="moje"    onclick="switchTab('moje')"><i class="ti ti-pencil"></i><span class="tab-lbl">Moje wpisy</span><span class="tab-badge" id="tab-moje-badge">0</span></button>
-      <button class="tab"        data-tab="todo"    onclick="switchTab('todo')"><i class="ti ti-checklist"></i><span class="tab-lbl">Daily TODO</span><span class="tab-badge" id="tab-todo-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
-      <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')"><i class="ti ti-notes"></i><span class="tab-lbl">Notatki</span><span class="tab-badge" id="tab-notes-badge">0</span></button>
-      <button class="tab"        data-tab="przypomnienia" onclick="switchTab('przypomnienia')"><i class="ti ti-bell"></i><span class="tab-lbl">Przypomnienia</span><span class="tab-badge" id="tab-przyp-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
-      <button class="tab"        data-tab="ref"     onclick="switchTab('ref')"><i class="ti ti-link"></i><span class="tab-lbl">Linki ref</span><span class="tab-badge" id="tab-ref-badge">0</span></button>
-      <button class="tab"        data-tab="portfel" onclick="switchTab('portfel')"><i class="ti ti-wallet"></i><span class="tab-lbl">Portfel</span><span class="tab-badge" id="tab-portfel-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
-      <button class="tab"        data-tab="konta"   onclick="switchTab('konta')"><i class="ti ti-users"></i><span class="tab-lbl">Konta</span><span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
-      <button class="tab"        data-tab="manual"  onclick="switchTab('manual')"><i class="ti ti-plus"></i><span class="tab-lbl">Dodaj ręcznie</span></button>
-      <button class="tab"        data-tab="airdrop" onclick="switchTab('airdrop')"><i class="ti ti-parachute"></i><span class="tab-lbl">Projekty</span><span class="tab-badge" id="tab-airdrop-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
-      <button class="tab"        data-tab="stats"   onclick="switchTab('stats')"><i class="ti ti-chart-bar"></i><span class="tab-lbl">Statystyki</span></button>
-      <button class="tab"        data-tab="aitools" onclick="switchTab('aitools')"><i class="ti ti-robot"></i><span class="tab-lbl">AI</span></button>
-      <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')"><i class="ti ti-dots"></i><span class="tab-lbl">Więcej</span><span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
+      <button class="tab active" data-tab="main"    onclick="switchTab('main')">Wpisy <span class="tab-badge" id="tab-main-badge">0</span></button>
+      <button class="tab"        data-tab="moje"    onclick="switchTab('moje')">Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
+      <button class="tab"        data-tab="todo"    onclick="switchTab('todo')">📋 Daily TODO <span class="tab-badge" id="tab-todo-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
+      <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
+      <button class="tab"        data-tab="przypomnienia" onclick="switchTab('przypomnienia')">🔔 Przypomnienia <span class="tab-badge" id="tab-przyp-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
+      <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
+      <button class="tab"        data-tab="portfel" onclick="switchTab('portfel')">👛 Portfel <span class="tab-badge" id="tab-portfel-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
+      <button class="tab"        data-tab="konta"   onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
+      <button class="tab"        data-tab="manual"  onclick="switchTab('manual')">✍ Dodaj ręcznie</button>
+      <button class="tab"        data-tab="airdrop" onclick="switchTab('airdrop')">🪂 Projekty <span class="tab-badge" id="tab-airdrop-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
+      <button class="tab"        data-tab="stats"   onclick="switchTab('stats')">📊 Statystyki</button>
+      <button class="tab"        data-tab="aitools" onclick="switchTab('aitools')">🤖 AI</button>
+      <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">Więcej ▾ <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
     </div>
 
     <!-- WPISY -->
@@ -5859,7 +5948,7 @@ Object.assign(window, {
   tgToggleSig, tgToggleWpi, tgSelectAllSig, tgSelectAllWpi, tgClearSig, tgClearWpi, tgRejectSig, tgRejectWpi,
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
   enablePushNotifications, addCustomReminder, addNftReminder, editReminderCustom, editReminderNft, cancelReminderEdit, deleteReminderOne, deleteReminderGroup,
-  addPosition, editPosition, cancelPositionEdit, deletePosition, exportPositionsCsv,
+  savePosition, editPosition, cancelPositionEdit, deletePosition, exportPositionsCsv, switchPosType, addWalletRow, removeWalletRow, recalcAirdrop,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
@@ -6324,9 +6413,8 @@ onAuthStateChanged(auth, async user => {
     try { if (typeof Notification !== 'undefined' && Notification.permission === 'granted') setupForegroundPush() } catch(_) {}
     // Wczytaj przypomnienia w tle (aktualizuje badge zakładki, nie blokuje startu)
     try { loadReminders() } catch(_) {}
-    // Wczytaj pozycje Portfela w tle (badge) + auto-ukrywanie zerowych badge na pasku
+    // Wczytaj pozycje Portfela w tle (badge)
     try { loadPositions() } catch(_) {}
-    try { initTabBadgeAutohide() } catch(_) {}
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
