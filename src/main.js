@@ -1,14 +1,14 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.23
-// Data:            2026-06-15
-// Zmiany:          Pasek zakładek PRZYWRÓCONY do starego (czytelnego) wyglądu
-//                  tekst+licznik (cofnięto eksperyment z ikonami). Zakładka Portfel
-//                  PRZEBUDOWANA: osobne formularze zależne od typu (Stake/Depozyt/LP/
-//                  Airdrop/Portfel/Inne), dodawanie wielu portfeli z ilościami,
-//                  auto-suma tokenów i auto-przeliczenia wartości (ilość×cena).
-// Poprzednia:      v2.22 (eksperyment z ikonami w pasku — cofnięty)
-// Git tag:         v2.23
+// Wersja:          v2.25
+// Data:            2026-06-16
+// Zmiany:          #3 Generator wątku: przycisk 🧵 (parafraza promptem #3 z podziałem
+//                  na części ≤255 zn.) → wynik do pola "Twoja parafraza" (zapis).
+//                  Prompty edytowalne w Ustawieniach (Firestore config/prompts):
+//                  parafraza, tłumaczenie, wątek — z "Przywróć domyślny" i fallbackiem.
+//                  Wszystkie przyciski AI czytają prompt z konfiguracji (lub domyślny).
+// Poprzednia:      v2.24 (Tłumacz + Przypomnij + Podgląd X)
+// Git tag:         v2.25
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -91,6 +91,22 @@ const AI_MODELS = [
     resetMs: 62 * 1000,
   }
 ]
+
+const TRANSLATE_PROMPT = `Przetłumacz poniższy tekst na język polski. Zwróć WYŁĄCZNIE samo tłumaczenie — bez komentarzy, bez oryginału, bez cudzysłowów, bez nagłówków ani wyjaśnień. Zachowaj sens, ton i podział na akapity. Jeśli tekst jest już po polsku, zwróć go bez zmian.
+
+Tekst do przetłumaczenia:`
+
+const THREAD_PROMPT = `Jesteś ekspertem od tworzenia wątków na X (Twitter). Sparafrazuj poniższy tekst w naturalny, angażujący sposób, a następnie PODZIEL parafrazę na kolejne części, z których KAŻDA ma maksymalnie 255 znaków.
+
+ZASADY PODZIAŁU (krytyczne):
+- Każda część maksymalnie 255 znaków łącznie ze spacjami.
+- NIGDY nie ucinaj zdania w połowie. Dziel tylko między zdaniami. Jeśli pojedyncze zdanie jest dłuższe niż 255 znaków, podziel je w naturalnym miejscu (po przecinku lub myślniku), tak aby każda część była spójna i czytelna.
+- Każda część musi mieć sens jako osobny wpis.
+- NIE numeruj części, NIE dodawaj "1/", emoji wątku ani żadnych znaczników.
+- Oddziel kolejne części JEDNĄ pustą linią (podwójny enter) i niczym więcej.
+- Zwróć WYŁĄCZNIE gotowe części — bez komentarzy, bez nagłówków, bez powtarzania oryginału.
+
+Tekst źródłowy do parafrazy i podziału:`
 
 const PARA_PROMPT = `THE WORLD-CLASS X POST PARAPHRASER & THREAD GENERATOR
 
@@ -443,9 +459,41 @@ async function checkGroqStatus() {
 
 function parseGroqHeaders() {} // zachowane dla kompatybilności, CORS blokuje nagłówki
 
-async function callModelApi(model, text) {
+// ── EDYTOWALNE PROMPTY AI (Firestore: config/prompts) ────────────
+// Puste pole = używany jest domyślny z kodu (fallback). Sync między urządzeniami.
+const PROMPT_DEFAULTS = { para: PARA_PROMPT, translate: TRANSLATE_PROMPT, thread: THREAD_PROMPT }
+let _promptCfg = {}
+function getPrompt(key) {
+  const v = _promptCfg[key]
+  return (v && v.trim()) ? v : (PROMPT_DEFAULTS[key] || '')
+}
+async function loadPromptCfg() {
+  try {
+    const d = await getDoc(doc(db, 'config', 'prompts'))
+    _promptCfg = (d && d.exists()) ? (d.data() || {}) : {}
+  } catch (e) { console.warn('[prompts] load:', e?.message); _promptCfg = {} }
+}
+async function savePromptCfg(key) {
+  const el = document.getElementById('prompt-' + key); if (!el) return
+  try {
+    await setDoc(doc(db, 'config', 'prompts'), { [key]: el.value }, { merge: true })
+    _promptCfg[key] = el.value
+    toast('Prompt zapisany ✓')
+  } catch (e) { toast('Błąd zapisu: ' + (e?.message || e)) }
+}
+async function resetPromptCfg(key) {
+  try {
+    await setDoc(doc(db, 'config', 'prompts'), { [key]: '' }, { merge: true })
+    _promptCfg[key] = ''
+    const el = document.getElementById('prompt-' + key); if (el) el.value = PROMPT_DEFAULTS[key] || ''
+    toast('Przywrócono domyślny ✓')
+  } catch (e) { toast('Błąd: ' + (e?.message || e)) }
+}
+function escPromptArea(s) { return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;') }
+
+async function callModelApi(model, text, promptPrefix = PARA_PROMPT) {
   const key = import.meta.env[model.envKey]
-  const fullPrompt = PARA_PROMPT + '\n\n' + text
+  const fullPrompt = promptPrefix + '\n\n' + text
 
   if (model.type === 'gemini') {
     const res = await fetch(`${model.url}?key=${key}`, {
@@ -493,7 +541,7 @@ async function callModelApi(model, text) {
   return data.choices?.[0]?.message?.content || ''
 }
 
-async function paraphraseWithAI(text) {
+async function paraphraseWithAI(text, promptKey = 'para') {
   const anyKey = AI_MODELS.some(m => import.meta.env[m.envKey])
   if (!anyKey) throw new Error('Brak kluczy API! Dodaj VITE_GROQ_API_KEY (lub inne) w Vercel.')
   for (let i = 0; i < AI_MODELS.length; i++) {
@@ -501,7 +549,7 @@ async function paraphraseWithAI(text) {
     if (!model) throw new Error('Wszystkie modele wyczerpały limity. Spróbuj za chwilę.')
     try {
       console.log(`[AI Para] Używam: ${model.name}`)
-      const result = await callModelApi(model, text)
+      const result = await callModelApi(model, text, getPrompt(promptKey))
       if (result && result.trim()) return { text: result.trim(), model: model.name }
       throw new Error('Pusta odpowiedź')
     } catch (err) {
@@ -517,10 +565,11 @@ async function paraphraseWithAI(text) {
   throw new Error('Nie udało się wygenerować parafrazy.')
 }
 
-async function triggerAIPara(postId, btn) {
+async function triggerAIPara(postId, btn, promptKey = 'para') {
   const ta        = document.getElementById('para-' + postId)
   const modelInfo = document.getElementById('para-model-' + postId)
   if (!ta) return
+  const _origLabel = btn.textContent
 
   const post = posts[postId]
   const sourceText = post?.text
@@ -534,7 +583,7 @@ async function triggerAIPara(postId, btn) {
   if (modelInfo) modelInfo.textContent = 'Łączę z modelem AI...'
 
   try {
-    const result = await paraphraseWithAI(sourceText)
+    const result = await paraphraseWithAI(sourceText, promptKey)
     // ── MOD 1: dopasuj linki ref ──────────────────────────────────
     const getDomain = url => { try { return new URL(url).hostname.replace('www.','') } catch { return '' } }
     const postLinks = post?.links || []
@@ -562,7 +611,7 @@ async function triggerAIPara(postId, btn) {
     toast('Błąd AI: ' + err.message)
   } finally {
     btn.disabled = false
-    btn.textContent = '✨ AI'
+    btn.textContent = _origLabel
   }
 }
 // ── KONIEC: AI PARAFRAZA ──────────────────────────────────────────
@@ -1451,6 +1500,141 @@ function exportPositionsCsv(){
   toast('Wyeksportowano CSV ✓')
 }
 // ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+// MODAL + TŁUMACZENIE + PRZYPOMNIENIE-Z-WPISU + PODGLĄD JAK NA X (v2.24)
+// Reużywalny popup w stylu todo-post-modal. Nic z tego nie psuje danych:
+// translate i podgląd są ulotne, "przypomnij" pisze do sprawdzonej 'reminders'.
+// ════════════════════════════════════════════════════════════════
+function openAppModal(innerHtml, maxw = 520) {
+  const id = 'app-modal'
+  document.getElementById(id)?.remove()
+  const m = document.createElement('div')
+  m.id = id
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px'
+  m.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:22px;width:100%;max-width:${maxw}px;max-height:85vh;overflow-y:auto">${innerHtml}</div>`
+  document.body.appendChild(m)
+  m.addEventListener('click', e => { if (e.target === m) m.remove() })
+  return id
+}
+function closeAppModal() { document.getElementById('app-modal')?.remove() }
+
+// ── #1 TŁUMACZENIE (popup, nic nie zapisuje) ─────────────────────
+async function translateWithAI(text) {
+  const anyKey = AI_MODELS.some(m => import.meta.env[m.envKey])
+  if (!anyKey) throw new Error('Brak kluczy API! Dodaj VITE_GROQ_API_KEY (lub inne) w Vercel.')
+  for (let i = 0; i < AI_MODELS.length; i++) {
+    const model = getBestAvailableModel()
+    if (!model) throw new Error('Wszystkie modele wyczerpały limity. Spróbuj za chwilę.')
+    try {
+      const result = await callModelApi(model, text, getPrompt('translate'))
+      if (result && result.trim()) return result.trim()
+      throw new Error('Pusta odpowiedź')
+    } catch (err) {
+      markModelExhausted(model)
+    }
+  }
+  throw new Error('Nie udało się przetłumaczyć.')
+}
+
+async function translatePost(id) {
+  const post = posts[id]
+  const text = post?.text || document.getElementById('orig-' + id)?.innerText || ''
+  if (!text.trim()) { toast('Brak tekstu do tłumaczenia'); return }
+  openAppModal(`
+    <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:14px">🌐 Tłumaczenie na polski</div>
+    <div id="translate-out" style="font-size:14px;line-height:1.65;white-space:pre-wrap;color:var(--text)">⏳ Tłumaczę...</div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+      <button class="btn" onclick="closeAppModal()">Zamknij</button>
+    </div>`)
+  try {
+    const out = await translateWithAI(text)
+    const el = document.getElementById('translate-out')
+    if (el) el.textContent = out
+  } catch (e) {
+    const el = document.getElementById('translate-out')
+    if (el) { el.textContent = 'Błąd: ' + (e?.message || e); el.style.color = 'var(--neon5)' }
+  }
+}
+
+// ── #2 PRZYPOMNIENIE Z WPISU (→ kolekcja reminders) ──────────────
+function reminderFromPost(id) {
+  const post = posts[id]
+  const snippet = (post?.text || '').replace(/\s+/g, ' ').trim().slice(0, 60)
+  const title = snippet ? `Wpis: ${snippet}` : 'Przypomnienie o wpisie'
+  const link = post?.xLink || ''
+  openAppModal(`
+    <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:14px">🔔 Przypomnienie z wpisu</div>
+    <div class="form-label">Treść</div>
+    <input class="form-input" id="rfp-title" value="${title.replace(/"/g,'&quot;')}" style="margin-bottom:10px">
+    <div class="form-label">Data i godzina</div>
+    <input class="form-input" id="rfp-dt" type="datetime-local" style="margin-bottom:10px">
+    <div class="form-label">Link (otworzy się po kliknięciu w push)</div>
+    <input class="form-input" id="rfp-link" value="${link.replace(/"/g,'&quot;')}" placeholder="https://..." style="margin-bottom:14px">
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-primary" onclick="saveReminderFromPost()">🔔 Utwórz</button>
+      <button class="btn" onclick="closeAppModal()">Anuluj</button>
+    </div>`)
+}
+async function saveReminderFromPost() {
+  const title = document.getElementById('rfp-title')?.value.trim()
+  const dt    = document.getElementById('rfp-dt')?.value
+  const link  = document.getElementById('rfp-link')?.value.trim() || '/'
+  if (!title) { toast('Wpisz treść przypomnienia'); return }
+  if (!dt)    { toast('Podaj datę i godzinę'); return }
+  const remindAt = new Date(dt).getTime()
+  if (isNaN(remindAt)) { toast('Nieprawidłowa data'); return }
+  if (remindAt < Date.now() - 60000) { toast('Ten termin już minął'); return }
+  const rid = 'rem_' + uid()
+  const r = { id: rid, type: 'custom', title, body: '', url: link, remindAt, recurring: null, sent: false, createdAt: nowStr() }
+  try {
+    await setDoc(doc(db, 'reminders', rid), r)
+    if (typeof _remindersCache === 'object' && _remindersCache) _remindersCache[rid] = r
+    closeAppModal()
+    toast('🔔 Przypomnienie utworzone ✓')
+  } catch (e) { toast('Błąd: ' + (e?.message || e)) }
+}
+
+// ── #4 PODGLĄD JAK NA X ──────────────────────────────────────────
+function getXHandle() { try { return localStorage.getItem('xHandle') || '' } catch { return '' } }
+function saveXHandle(v) {
+  try { localStorage.setItem('xHandle', (v || '').replace(/^@/, '').trim()) } catch {}
+  const s = document.getElementById('x-handle-saved'); if (s) s.textContent = 'Zapisano ✓'
+}
+function previewAsX(text) {
+  const t = (text || '').trim()
+  if (!t) { toast('Brak tekstu do podglądu'); return }
+  const u = window._currentUser || {}
+  const avatar = u.photoURL || ''
+  const name = u.displayName || 'Ty'
+  let handle = getXHandle().replace(/^@/, '') || 'ty'
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const body = esc(t).replace(/(https?:\/\/[^\s]+)/g, '<span style="color:#1d9bf0">$1</span>').replace(/\n/g, '<br>')
+  const av = avatar
+    ? `<img src="${avatar}" style="width:44px;height:44px;border-radius:50%;flex-shrink:0;object-fit:cover">`
+    : `<div style="width:44px;height:44px;border-radius:50%;background:var(--bg4);flex-shrink:0"></div>`
+  const over = t.length > 280
+  openAppModal(`
+    <div style="font-size:13px;color:var(--text3);margin-bottom:12px">👁 Podgląd jak na X</div>
+    <div style="background:#15202b;border:1px solid #2f3b47;border-radius:16px;padding:14px 16px;color:#e7e9ea;font-family:system-ui,-apple-system,sans-serif">
+      <div style="display:flex;gap:10px;align-items:flex-start">
+        ${av}
+        <div style="min-width:0">
+          <div style="font-weight:700;font-size:15px;line-height:1.2">${esc(name)}</div>
+          <div style="color:#71767b;font-size:14px">@${esc(handle)}</div>
+        </div>
+      </div>
+      <div style="margin-top:10px;font-size:15px;line-height:1.5;word-wrap:break-word">${body}</div>
+    </div>
+    <div style="font-size:11px;margin-top:8px;color:${over ? 'var(--neon5)' : 'var(--text3)'}">Długość: ${t.length} / 280 znaków${over ? ' — przekroczono (potrzebny wątek lub konto premium)' : ''}</div>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="btn" onclick="closeAppModal()">Zamknij</button>
+    </div>`, 440)
+}
+function previewMyPost(id) {
+  const p = myPosts[id]; if (!p) { toast('Brak wpisu'); return }
+  previewAsX(p.text || '')
+}
+// ════════════════════════════════════════════════════════════════
 function statusStyle(s) {
   const m = {
     'Nowy':              'background:rgba(0,229,255,.1);color:#00e5ff',
@@ -1960,6 +2144,7 @@ function renderMain() {
           <div class="col-label" style="display:flex;align-items:center;justify-content:space-between;gap:6px">
             <span>Twoja parafraza</span>
             <button class="btn-ai-para" onclick="triggerAIPara('${p.id}',this)" title="Generuj parafrazę przez AI">✨ AI</button>
+            <button class="btn-ai-para" onclick="triggerAIPara('${p.id}',this,'thread')" title="Parafraza pocięta na części ≤255 znaków (prompt #3)">🧵 Wątek</button>
           </div>
           <div class="ai-para-info" id="para-model-${p.id}"></div>
           <textarea class="para-area" id="para-${p.id}"
@@ -1978,6 +2163,9 @@ function renderMain() {
         <button class="btn" onclick="copyText(document.getElementById('orig-${p.id}').innerText)">Kopiuj oryginał</button>
         <button class="btn btn-info" onclick="copyText(document.getElementById('para-${p.id}').value)">Kopiuj parafrazę</button>
         <button class="btn" style="background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15);white-space:nowrap" onclick="copyAndOpenX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Kopiuj parafrazę i otwórz X">🐦 Publikuj na X</button>
+        <button class="btn" onclick="previewAsX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Podgląd jak na X">👁 Podgląd</button>
+        <button class="btn" onclick="translatePost('${p.id}')" title="Przetłumacz na polski">🌐 Tłumacz</button>
+        <button class="btn" onclick="reminderFromPost('${p.id}')" title="Utwórz przypomnienie z tego wpisu">🔔 Przypomnij</button>
         <button class="btn btn-success" onclick="addToProjects('${p.id}')" title="Dodaj do zakładki Projekty">🪂 Dodaj do Projektów</button>
         <button class="btn" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#10b981;white-space:nowrap" onclick="openTodoFromPost('${p.id}')">📋 Dodaj do TODO</button>
         <button class="btn btn-danger ml-auto" onclick="setPostStatus('${p.id}','Odrzucone')">Odrzuć</button>
@@ -2455,6 +2643,7 @@ function renderMoje() {
         <button class="btn" onclick="copyText(\`${p.text.replace(/`/g,"'").replace(/\\/g,'\\\\')}\`)">Kopiuj wpis</button>
         <button class="btn" style="background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15);white-space:nowrap" onclick="copyAndOpenX(\`${p.text.replace(/`/g,"'").replace(/\\/g,'\\\\')}\`)" title="Kopiuj wpis i otwórz X">🐦 Publikuj na X</button>
         <button class="btn" onclick="startMyEdit('${p.id}')">Edytuj</button>
+        <button class="btn" onclick="previewMyPost('${p.id}')" title="Podgląd jak na X">👁 Podgląd</button>
         ${p.status!=='Opublikowane'?`<button class="btn btn-success" onclick="publishMyPost('${p.id}')">Opublikowano</button>`:''}
         <button class="btn btn-danger ml-auto" onclick="deleteMyPost('${p.id}')">Usuń</button>
       </div>` : ''}
@@ -3916,6 +4105,41 @@ function renderAtSettings() {
         <button id="push-enable-btn" class="btn btn-primary" style="width:100%;font-size:13px" onclick="enablePushNotifications()">🔔 Włącz powiadomienia</button>
         <div id="push-status" style="margin-top:8px;font-size:11px;color:var(--text3)"></div>
         <button class="btn" style="width:100%;font-size:12px;margin-top:10px" onclick="switchTab('przypomnienia')">📅 Przejdź do Przypomnień</button>
+      </div>
+
+      <!-- 👁 PODGLĄD X -->
+      <div class="form-card">
+        <div class="form-title">👁 Podgląd „jak na X"</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Twój handle X używany w podglądzie wpisów (avatar bierze się z konta Google).</div>
+        <input class="form-input" id="x-handle-input" placeholder="np. RzWojtek" value="${getXHandle().replace(/"/g,'&quot;')}" oninput="saveXHandle(this.value)">
+        <div id="x-handle-saved" style="font-size:11px;color:var(--neon);margin-top:6px"></div>
+      </div>
+
+      <!-- 🧠 PROMPTY AI -->
+      <div class="form-card">
+        <div class="form-title">🧠 Prompty AI</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Edytuj prompty bez ruszania kodu. Puste pole = używany jest domyślny. Zmiany synchronizują się między urządzeniami (Firestore).</div>
+
+        <div class="form-label">1. Parafraza — przycisk ✨ AI</div>
+        <textarea class="form-input" id="prompt-para" style="min-height:120px;font-family:monospace;font-size:11px;line-height:1.4">${escPromptArea(getPrompt('para'))}</textarea>
+        <div style="display:flex;gap:8px;margin:6px 0 16px">
+          <button class="btn btn-primary" style="font-size:12px" onclick="savePromptCfg('para')">💾 Zapisz</button>
+          <button class="btn" style="font-size:12px" onclick="resetPromptCfg('para')">↩ Przywróć domyślny</button>
+        </div>
+
+        <div class="form-label">2. Tłumaczenie — przycisk 🌐 Tłumacz</div>
+        <textarea class="form-input" id="prompt-translate" style="min-height:90px;font-family:monospace;font-size:11px;line-height:1.4">${escPromptArea(getPrompt('translate'))}</textarea>
+        <div style="display:flex;gap:8px;margin:6px 0 16px">
+          <button class="btn btn-primary" style="font-size:12px" onclick="savePromptCfg('translate')">💾 Zapisz</button>
+          <button class="btn" style="font-size:12px" onclick="resetPromptCfg('translate')">↩ Przywróć domyślny</button>
+        </div>
+
+        <div class="form-label">3. Parafraza + podział na wątek — przycisk 🧵 Wątek</div>
+        <textarea class="form-input" id="prompt-thread" style="min-height:120px;font-family:monospace;font-size:11px;line-height:1.4">${escPromptArea(getPrompt('thread'))}</textarea>
+        <div style="display:flex;gap:8px;margin:6px 0 4px">
+          <button class="btn btn-primary" style="font-size:12px" onclick="savePromptCfg('thread')">💾 Zapisz</button>
+          <button class="btn" style="font-size:12px" onclick="resetPromptCfg('thread')">↩ Przywróć domyślny</button>
+        </div>
       </div>
 
       <!-- STATUSY PROJEKTÓW -->
@@ -5949,6 +6173,8 @@ Object.assign(window, {
   loadVpsAccounts, vpsAddAccountX, vpsRemoveAccountX, vpsAddTg, vpsRemoveTg,
   enablePushNotifications, addCustomReminder, addNftReminder, editReminderCustom, editReminderNft, cancelReminderEdit, deleteReminderOne, deleteReminderGroup,
   savePosition, editPosition, cancelPositionEdit, deletePosition, exportPositionsCsv, switchPosType, addWalletRow, removeWalletRow, recalcAirdrop,
+  translatePost, reminderFromPost, saveReminderFromPost, previewAsX, previewMyPost, saveXHandle, closeAppModal,
+  savePromptCfg, resetPromptCfg,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
@@ -6415,6 +6641,8 @@ onAuthStateChanged(auth, async user => {
     try { loadReminders() } catch(_) {}
     // Wczytaj pozycje Portfela w tle (badge)
     try { loadPositions() } catch(_) {}
+    // Wczytaj edytowalne prompty AI z Firestore (fallback do domyślnych, gdy brak)
+    try { loadPromptCfg() } catch(_) {}
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
