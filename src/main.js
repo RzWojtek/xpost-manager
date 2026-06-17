@@ -107,7 +107,7 @@ ZASADY PODZIAŁU (krytyczne):
 
 Tekst źródłowy do parafrazy i podziału:`
 
-const IMAGE_PROMPT = `You are an expert at writing prompts for AI image generators. Based on the social-media post below, write ONE single-line image-generation prompt in ENGLISH that captures its topic, mood and message as an eye-catching visual.
+const IMAGE_GEN_PROMPT = `You are an expert at writing prompts for AI image generators. Based on the social-media post below, write ONE single-line image-generation prompt in ENGLISH that captures its topic, mood and message as an eye-catching visual.
 
 Rules:
 - Output ONLY the prompt — no quotes, no explanation, no labels.
@@ -470,7 +470,7 @@ function parseGroqHeaders() {} // zachowane dla kompatybilności, CORS blokuje n
 
 // ── EDYTOWALNE PROMPTY AI (Firestore: config/prompts) ────────────
 // Puste pole = używany jest domyślny z kodu (fallback). Sync między urządzeniami.
-const PROMPT_DEFAULTS = { para: PARA_PROMPT, translate: TRANSLATE_PROMPT, thread: THREAD_PROMPT, image: IMAGE_PROMPT }
+const PROMPT_DEFAULTS = { para: PARA_PROMPT, translate: TRANSLATE_PROMPT, thread: THREAD_PROMPT, image: IMAGE_GEN_PROMPT }
 let _promptCfg = {}
 function getPrompt(key) {
   const v = _promptCfg[key]
