@@ -1,14 +1,13 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.25
-// Data:            2026-06-16
-// Zmiany:          #3 Generator wątku: przycisk 🧵 (parafraza promptem #3 z podziałem
-//                  na części ≤255 zn.) → wynik do pola "Twoja parafraza" (zapis).
-//                  Prompty edytowalne w Ustawieniach (Firestore config/prompts):
-//                  parafraza, tłumaczenie, wątek — z "Przywróć domyślny" i fallbackiem.
-//                  Wszystkie przyciski AI czytają prompt z konfiguracji (lub domyślny).
-// Poprzednia:      v2.24 (Tłumacz + Przypomnij + Podgląd X)
-// Git tag:         v2.25
+// Wersja:          v2.26
+// Data:            2026-06-17
+// Zmiany:          🖼 Obrazek na karcie wpisu: parafraza → opis wizualny (AI, prompt
+//                  'image') → obrazek przez Pollinations.ai (darmowe, BEZ klucza) w
+//                  modalu (Pobierz / Regeneruj). 4. edytowalny prompt "opis obrazu"
+//                  w Ustawieniach. Bez instalacji po stronie usera (brak klucza/env).
+// Poprzednia:      v2.25 (generator wątku + edytowalne prompty)
+// Git tag:         v2.26
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -107,6 +106,16 @@ ZASADY PODZIAŁU (krytyczne):
 - Zwróć WYŁĄCZNIE gotowe części — bez komentarzy, bez nagłówków, bez powtarzania oryginału.
 
 Tekst źródłowy do parafrazy i podziału:`
+
+const IMAGE_PROMPT = `You are an expert at writing prompts for AI image generators. Based on the social-media post below, write ONE single-line image-generation prompt in ENGLISH that captures its topic, mood and message as an eye-catching visual.
+
+Rules:
+- Output ONLY the prompt — no quotes, no explanation, no labels.
+- Describe concrete visual elements, scene, style, lighting and colors, separated by commas.
+- Keep it under ~40 words. Modern, high-quality, detailed look.
+- Avoid rendering long text inside the image (it comes out garbled).
+
+Post:`
 
 const PARA_PROMPT = `THE WORLD-CLASS X POST PARAPHRASER & THREAD GENERATOR
 
@@ -461,7 +470,7 @@ function parseGroqHeaders() {} // zachowane dla kompatybilności, CORS blokuje n
 
 // ── EDYTOWALNE PROMPTY AI (Firestore: config/prompts) ────────────
 // Puste pole = używany jest domyślny z kodu (fallback). Sync między urządzeniami.
-const PROMPT_DEFAULTS = { para: PARA_PROMPT, translate: TRANSLATE_PROMPT, thread: THREAD_PROMPT }
+const PROMPT_DEFAULTS = { para: PARA_PROMPT, translate: TRANSLATE_PROMPT, thread: THREAD_PROMPT, image: IMAGE_PROMPT }
 let _promptCfg = {}
 function getPrompt(key) {
   const v = _promptCfg[key]
@@ -1634,6 +1643,63 @@ function previewMyPost(id) {
   const p = myPosts[id]; if (!p) { toast('Brak wpisu'); return }
   previewAsX(p.text || '')
 }
+
+// ── #5 GENEROWANIE OBRAZKA (Pollinations.ai — darmowe, bez klucza) ─
+let _lastImgPrompt = ''
+async function generateImageForPost(id) {
+  const ta = document.getElementById('para-' + id)
+  const text = (ta && ta.value.trim()) || posts[id]?.text || ''
+  if (!text.trim()) { toast('Brak tekstu (parafrazy) do obrazka'); return }
+  openAppModal(`
+    <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:14px">🖼 Obrazek do wpisu</div>
+    <div id="img-out" style="font-size:13px;color:var(--text2)">⏳ Tworzę opis wizualny i generuję obrazek...</div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+      <button class="btn" onclick="closeAppModal()">Zamknij</button>
+    </div>`, 560)
+  try {
+    const result = await paraphraseWithAI(text, 'image')
+    _lastImgPrompt = (result?.text || '').trim() || text
+    renderGeneratedImage()
+  } catch (e) {
+    const el = document.getElementById('img-out')
+    if (el) { el.textContent = 'Błąd opisu AI: ' + (e?.message || e); el.style.color = 'var(--neon5)' }
+  }
+}
+function buildPollinationsUrl(prompt, seed) {
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&enhance=true&seed=${seed}`
+}
+function renderGeneratedImage() {
+  const m = document.getElementById('app-modal'); if (!m || !m.firstElementChild) return
+  const seed = Math.floor(Math.random() * 1e9)
+  const url = buildPollinationsUrl(_lastImgPrompt, seed)
+  m.firstElementChild.innerHTML = `
+    <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:10px">🖼 Obrazek do wpisu</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px;font-style:italic">Opis: ${(_lastImgPrompt || '').replace(/</g, '&lt;')}</div>
+    <div style="position:relative;background:var(--bg3);border-radius:var(--rl);min-height:200px;display:flex;align-items:center;justify-content:center">
+      <span id="img-loading" style="position:absolute;font-size:12px;color:var(--text3)">⏳ Generuję obrazek (chwilę to trwa)...</span>
+      <img src="${url}" style="width:100%;border-radius:var(--rl);display:block" onload="var s=document.getElementById('img-loading');if(s)s.style.display='none'" onerror="var s=document.getElementById('img-loading');if(s)s.textContent='❌ Nie udało się — kliknij Regeneruj'">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn" onclick="regenImage()">🔄 Regeneruj</button>
+      <button class="btn btn-primary" onclick="downloadImage('${url}')">⬇ Pobierz</button>
+      <button class="btn" onclick="closeAppModal()">Zamknij</button>
+    </div>`
+}
+function regenImage() { if (_lastImgPrompt) renderGeneratedImage() }
+async function downloadImage(url) {
+  try {
+    const r = await fetch(url)
+    const blob = await r.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'xpost_' + Date.now() + '.jpg'
+    a.click()
+    URL.revokeObjectURL(a.href)
+    toast('Pobrano obrazek ✓')
+  } catch (e) {
+    window.open(url, '_blank')  // fallback: otwórz w nowej karcie do zapisania ręcznie
+  }
+}
 // ════════════════════════════════════════════════════════════════
 function statusStyle(s) {
   const m = {
@@ -2145,6 +2211,7 @@ function renderMain() {
             <span>Twoja parafraza</span>
             <button class="btn-ai-para" onclick="triggerAIPara('${p.id}',this)" title="Generuj parafrazę przez AI">✨ AI</button>
             <button class="btn-ai-para" onclick="triggerAIPara('${p.id}',this,'thread')" title="Parafraza pocięta na części ≤255 znaków (prompt #3)">🧵 Wątek</button>
+            <button class="btn-ai-para" onclick="generateImageForPost('${p.id}')" title="Wygeneruj obrazek na podstawie parafrazy">🖼 Obrazek</button>
           </div>
           <div class="ai-para-info" id="para-model-${p.id}"></div>
           <textarea class="para-area" id="para-${p.id}"
@@ -4139,6 +4206,13 @@ function renderAtSettings() {
         <div style="display:flex;gap:8px;margin:6px 0 4px">
           <button class="btn btn-primary" style="font-size:12px" onclick="savePromptCfg('thread')">💾 Zapisz</button>
           <button class="btn" style="font-size:12px" onclick="resetPromptCfg('thread')">↩ Przywróć domyślny</button>
+        </div>
+
+        <div class="form-label">4. Opis obrazu — przycisk 🖼 Obrazek (zamienia wpis na angielski opis wizualny)</div>
+        <textarea class="form-input" id="prompt-image" style="min-height:110px;font-family:monospace;font-size:11px;line-height:1.4">${escPromptArea(getPrompt('image'))}</textarea>
+        <div style="display:flex;gap:8px;margin:6px 0 4px">
+          <button class="btn btn-primary" style="font-size:12px" onclick="savePromptCfg('image')">💾 Zapisz</button>
+          <button class="btn" style="font-size:12px" onclick="resetPromptCfg('image')">↩ Przywróć domyślny</button>
         </div>
       </div>
 
@@ -6175,6 +6249,7 @@ Object.assign(window, {
   savePosition, editPosition, cancelPositionEdit, deletePosition, exportPositionsCsv, switchPosType, addWalletRow, removeWalletRow, recalcAirdrop,
   translatePost, reminderFromPost, saveReminderFromPost, previewAsX, previewMyPost, saveXHandle, closeAppModal,
   savePromptCfg, resetPromptCfg,
+  generateImageForPost, regenImage, downloadImage,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
