@@ -8,7 +8,7 @@
 
 ## 📋 CZEGO POTRZEBUJESZ PRZED ROZPOCZĘCIEM
 
-Zgromadź te rzeczy zanim zaczniesz — będą potrzebne w trakcie:
+Zgromadź te rzeczy  zanim zaczniesz — będą potrzebne w trakcie:
 
 | Co | Gdzie to znajdziesz |
 |---|---|
