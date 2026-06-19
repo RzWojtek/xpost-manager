@@ -1,15 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.35
+// Wersja:          v2.36
 // Data:            2026-06-19
-// Zmiany:          Import z X ("Pobierz z X") → zapis jako SZKIC w "Dodaj ręcznie"
-//                  (manualDrafts, badge "🐦 Z X") zamiast prosto do Wpisów. Szkic z X
-//                  zachowuje linki/zdjęcia, a sendDraftToWpisy je przenosi przy wysyłce.
-//                  WYMAGA równoczesnego wgrania poprawionych plików VPS (fetch_tweet.py
-//                  + main.py): pełna treść długich tweetów (note_tweet) + zwracanie
-//                  danych zamiast zapisu do posts.
-// Poprzednia:      v2.34 (#5 share target → pole importu)
-// Git tag:         v2.35
+// Zmiany:          Globalne wyszukiwanie (🔍 w topbarze): jedno pole przeszukuje
+//                  wpisy + notatki + linki ref + projekty + przypomnienia, klik wyniku
+//                  przenosi do zakładki. manualDrafts dodane do listy backupu.
+// Poprzednia:      v2.35 (import z X → szkic + pełna treść)
+// Git tag:         v2.36
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -506,7 +503,7 @@ function escPromptArea(s) { return (s == null ? '' : String(s)).replace(/&/g, '&
 const BACKUP_COLLECTIONS = [
   'posts','myPosts','notes','refLinks','konta','positions','reminders',
   'airdropTasks','airdropConfig','dailyTasks','aiTools','emojis','config',
-  'fcmTokens','tgSignals','tgWpisy','rejectedIndex'
+  'fcmTokens','tgSignals','tgWpisy','rejectedIndex','manualDrafts'
 ]
 
 async function exportBackup() {
@@ -2200,6 +2197,45 @@ function switchSubTab(name) {
 }
 
 // ── REF CHIPS ─────────────────────────────────────────────────────
+// ── GLOBALNE WYSZUKIWANIE (wpisy+notatki+linki+projekty+przypomnienia) ──
+function openGlobalSearch() {
+  openAppModal(`
+    <div style="font-weight:700;font-size:15px;margin-bottom:8px">🔍 Szukaj wszędzie</div>
+    <input id="gs-input" class="form-input" placeholder="Wpisz frazę (min. 2 znaki)..." style="width:100%;margin-bottom:10px" oninput="runGlobalSearch(this.value)">
+    <div id="gs-results" style="max-height:55vh;overflow:auto"></div>
+  `, 640)
+  setTimeout(() => document.getElementById('gs-input')?.focus(), 50)
+}
+
+async function runGlobalSearch(q) {
+  q = (q || '').trim().toLowerCase()
+  const box = document.getElementById('gs-results')
+  if (!box) return
+  if (q.length < 2) { box.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:8px">Wpisz min. 2 znaki…</div>'; return }
+  if (!Object.keys(_remindersCache || {}).length) { try { await loadReminders() } catch(_) {} }
+  const esc = s => String(s || '').replace(/</g, '&lt;')
+  const groups = [
+    { tab:'main',          icon:'📝', label:'Wpisy',          data:posts,        title:o => '@'+(o.account||'')+' — '+(o.text||'') },
+    { tab:'notatki',       icon:'🗒️', label:'Notatki',        data:notes,        title:o => (o.text||o.title||'') },
+    { tab:'ref',           icon:'🔗', label:'Linki ref',      data:refLinks,     title:o => (o.name||'')+' — '+(o.url||'') },
+    { tab:'airdrop',       icon:'🪂', label:'Projekty',       data:airdropTasks, title:o => (o.name||o.project||'projekt')+' '+(JSON.stringify(o.entries||'')) },
+    { tab:'przypomnienia', icon:'🔔', label:'Przypomnienia',  data:_remindersCache, title:o => (o.title||o.text||o.note||'') },
+  ]
+  let html = '', total = 0
+  for (const g of groups) {
+    const items = Object.values(g.data || {}).filter(o => o && o.status !== 'Odrzucone' && JSON.stringify(o).toLowerCase().includes(q))
+    if (!items.length) continue
+    html += `<div style="font-size:11px;color:var(--text3);margin:10px 0 4px;text-transform:uppercase">${g.icon} ${g.label} (${items.length})</div>`
+    for (const o of items.slice(0, 15)) {
+      total++
+      html += `<div onclick="gsGo('${g.tab}')" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--r);margin-bottom:5px;cursor:pointer;font-size:13px" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">${esc((g.title(o)||'(brak)').slice(0,110))}</div>`
+    }
+  }
+  box.innerHTML = total ? html : '<div style="color:var(--text3);font-size:13px;padding:8px">Brak wyników.</div>'
+}
+
+function gsGo(tab) { closeAppModal(); switchTab(tab) }
+
 // ── AUTO-EKSTRAKCJA LINKÓW Z WPISU → Linki ref ────────────────────
 function openRefLinkModal(postId) {
   const p = posts[postId]
@@ -5592,6 +5628,7 @@ function buildApp() {
       <h1>𝕏 XPost Manager</h1>
       <span class="sync-info" id="sync-info">ładowanie...</span>
       <button class="btn-sync" onclick="syncSheets()">Synchronizuj</button>
+      <button class="btn-sync" onclick="openGlobalSearch()" title="Szukaj wszędzie">🔍</button>
       <div class="user-row">
         <img class="user-avatar" id="user-avatar" src="" alt="">
         <span class="user-name" id="user-name"></span>
@@ -6612,6 +6649,7 @@ Object.assign(window, {
   exportBackup, triggerImportBackup, importBackupFile,
   loadMoreMain,
   openRefLinkModal, saveAutoRefLinks,
+  openGlobalSearch, runGlobalSearch, gsGo,
   generateImageForPost, regenImage, downloadImage,
 })
 
