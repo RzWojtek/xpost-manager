@@ -1,21 +1,18 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.27
+// Wersja:          v2.28
 // Data:            2026-06-19
-// Zmiany:          WYDAJNOŚĆ: loadAll ładuje tylko aktywne wpisy (where status !=
-//                  'Odrzucone') zamiast wszystkich ~5700 → ~93% mniej odczytów Firebase.
-//                  Odrzucone id trzymane w lekkim indeksie 'rejectedIndex' (shardy);
-//                  po wczytaniu zasiewane jako zaślepki do `posts`, więc syncSheets
-//                  działa BEZ ZMIAN (anty-duplikat nienaruszony). Błąd wczytania
-//                  indeksu zatrzymuje loadAll → sync nie startuje (ochrona). Zapis id
-//                  do indeksu przy odrzucaniu (setPostStatus + deleteMainSelected).
-// Poprzednia:      v2.26 (🖼 generowanie obrazków)
-// Git tag:         v2.27
+// Zmiany:          Grupa 1 (Ustawienia, bez dotykania renderMain/syncSheets/loadAll):
+//                  💾 Backup całej bazy do JSON + 📥 Import z JSON (nadpis po ID,
+//                  z potwierdzeniem). Licznik zaznaczonych znaków w polach parafrazy
+//                  (pływający badge).
+// Poprzednia:      v2.27 (wydajność: indeks odrzuconych)
+// Git tag:         v2.28
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
 import {
-  collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, where, limit, onSnapshot
+  collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, orderBy, where, limit, onSnapshot, writeBatch
 } from 'firebase/firestore'
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
 import { getApp } from 'firebase/app'
@@ -502,6 +499,108 @@ async function resetPromptCfg(key) {
   } catch (e) { toast('Błąd: ' + (e?.message || e)) }
 }
 function escPromptArea(s) { return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;') }
+
+// ── BACKUP / RESTORE (cała baza ↔ plik JSON) ──────────────────────
+const BACKUP_COLLECTIONS = [
+  'posts','myPosts','notes','refLinks','konta','positions','reminders',
+  'airdropTasks','airdropConfig','dailyTasks','aiTools','emojis','config',
+  'fcmTokens','tgSignals','tgWpisy','rejectedIndex'
+]
+
+async function exportBackup() {
+  const st = document.getElementById('backup-status')
+  const setSt = t => { if (st) st.textContent = t }
+  setSt('⏳ Eksportuję wszystkie kolekcje (chwilę to potrwa)...')
+  try {
+    const dump = { _meta: { app: 'XPost Manager', exportedAt: new Date().toISOString() } }
+    let total = 0
+    for (const col of BACKUP_COLLECTIONS) {
+      const snap = await getDocs(collection(db, col))
+      const obj = {}
+      snap.forEach(d => { obj[d.id] = d.data() })
+      dump[col] = obj
+      total += snap.size
+      setSt(`⏳ ${col}: ${snap.size} (łącznie ${total})`)
+    }
+    const blob = new Blob([JSON.stringify(dump)], { type: 'application/json' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'xpost_backup_' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.json'
+    a.click()
+    URL.revokeObjectURL(a.href)
+    setSt(`✅ Backup gotowy: ${total} dokumentów. Plik pobrany na komputer.`)
+    toast('Backup pobrany ✓')
+  } catch (e) {
+    setSt('❌ Błąd eksportu: ' + (e?.message || e))
+  }
+}
+
+function triggerImportBackup() { document.getElementById('backup-file-input')?.click() }
+
+async function importBackupFile(input) {
+  const file = input.files?.[0]; if (!file) return
+  input.value = ''
+  const st = document.getElementById('backup-status')
+  const setSt = t => { if (st) st.textContent = t }
+  let dump
+  try { dump = JSON.parse(await file.text()) }
+  catch { setSt('❌ To nie jest poprawny plik JSON.'); return }
+
+  const present = BACKUP_COLLECTIONS.filter(c => dump[c])
+  const counts = present.map(c => `${c}: ${Object.keys(dump[c]).length}`)
+  const totalDocs = present.reduce((s, c) => s + Object.keys(dump[c]).length, 0)
+  if (!totalDocs) { setSt('❌ Plik nie zawiera danych do przywrócenia.'); return }
+
+  if (!confirm(`⚠️ UWAGA — przywracanie NADPISZE obecne dokumenty tymi z pliku (po ID).\n\nDo przywrócenia: ${totalDocs} dokumentów\n` + counts.join('\n') + `\n\nNa pewno kontynuować?`)) {
+    setSt('Anulowano import.')
+    return
+  }
+
+  setSt('⏳ Importuję... NIE zamykaj tej karty.')
+  try {
+    let done = 0
+    for (const col of present) {
+      const docs = dump[col]
+      const ids = Object.keys(docs)
+      for (let i = 0; i < ids.length; i += 400) {
+        const batch = writeBatch(db)
+        for (const id of ids.slice(i, i + 400)) batch.set(doc(db, col, id), docs[id])
+        await batch.commit()
+        done += Math.min(400, ids.length - i)
+        setSt(`⏳ Przywracam ${col}... (${done}/${totalDocs})`)
+      }
+    }
+    setSt(`✅ Przywrócono ${done} dokumentów. ODŚWIEŻ stronę (F5), żeby zobaczyć dane.`)
+    toast('Import zakończony ✓')
+  } catch (e) {
+    setSt('❌ Błąd importu: ' + (e?.message || e))
+  }
+}
+
+// ── LICZNIK ZAZNACZONYCH ZNAKÓW (w polach parafrazy) ──────────────
+function initSelectionCounter() {
+  let badge = null
+  const ensure = () => {
+    if (!badge) {
+      badge = document.createElement('div')
+      badge.id = 'sel-counter'
+      badge.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:9998;background:var(--neon);color:#0a0a14;font-weight:700;font-size:13px;padding:6px 12px;border-radius:20px;box-shadow:0 2px 12px rgba(0,229,255,.4);pointer-events:none;display:none'
+      document.body.appendChild(badge)
+    }
+    return badge
+  }
+  document.addEventListener('selectionchange', () => {
+    const el = document.activeElement
+    if (el && el.tagName === 'TEXTAREA' && typeof el.selectionStart === 'number' && el.id && el.id.startsWith('para-')) {
+      const len = (el.value.substring(el.selectionStart, el.selectionEnd) || '').length
+      const b = ensure()
+      if (len > 0) { b.textContent = `Zaznaczono: ${len} znaków`; b.style.display = 'block' }
+      else b.style.display = 'none'
+    } else if (badge) {
+      badge.style.display = 'none'
+    }
+  })
+}
 
 async function callModelApi(model, text, promptPrefix = PARA_PROMPT) {
   const key = import.meta.env[model.envKey]
@@ -4283,6 +4382,18 @@ function renderAtSettings() {
         </div>
       </div>
 
+      <!-- 💾 BACKUP -->
+      <div class="form-card">
+        <div class="form-title">💾 Backup i przywracanie</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Eksport pobierze całą bazę (wszystkie zakładki) jako jeden plik JSON na Twój komputer. Import przywraca dane z takiego pliku (nadpisuje po ID).</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="exportBackup()">💾 Zrób backup (pobierz JSON)</button>
+          <button class="btn" onclick="triggerImportBackup()">📥 Importuj z backup</button>
+          <input type="file" id="backup-file-input" accept="application/json,.json" style="display:none" onchange="importBackupFile(this)">
+        </div>
+        <div id="backup-status" style="font-size:11px;color:var(--text2);margin-top:10px;min-height:14px"></div>
+      </div>
+
       <!-- STATUSY PROJEKTÓW -->
       <div class="form-card">
         <div class="form-title">📋 Statusy projektów</div>
@@ -6316,6 +6427,7 @@ Object.assign(window, {
   savePosition, editPosition, cancelPositionEdit, deletePosition, exportPositionsCsv, switchPosType, addWalletRow, removeWalletRow, recalcAirdrop,
   translatePost, reminderFromPost, saveReminderFromPost, previewAsX, previewMyPost, saveXHandle, closeAppModal,
   savePromptCfg, resetPromptCfg,
+  exportBackup, triggerImportBackup, importBackupFile,
   generateImageForPost, regenImage, downloadImage,
 })
 
@@ -6785,6 +6897,7 @@ onAuthStateChanged(auth, async user => {
     try { loadPositions() } catch(_) {}
     // Wczytaj edytowalne prompty AI z Firestore (fallback do domyślnych, gdy brak)
     try { loadPromptCfg() } catch(_) {}
+    try { initSelectionCounter() } catch(_) {}
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
