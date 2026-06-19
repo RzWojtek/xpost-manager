@@ -1,15 +1,13 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.30
+// Wersja:          v2.31
 // Data:            2026-06-19
-// Zmiany:          Grupa "karta" pod-krok 2 (renderowanie w renderMain — logika
-//                  filtrów/sortowania/duplikatów NIETKNIĘTA): PAGINACJA listy wpisów
-//                  (pokazuje 50, dociąga po 50 przy scrollu + przycisk "Pokaż więcej";
-//                  reset do 50 przy zmianie filtrów). ZWIŃ/ROZWIŃ akcje na karcie —
-//                  przyciski akcji domyślnie zwinięte (widać "⚙ Pokaż akcje"), klik
-//                  pokazuje wszystkie; stan w Set, przełączanie = samo CSS.
-// Poprzednia:      v2.29 (swipe + Cofnij)
-// Git tag:         v2.30
+// Zmiany:          Poprawka UX karty: zwijanie/rozwijanie akcji przejęte przez
+//                  istniejący przycisk "Rozwiń/Zwiń" (rozwija tekst I przyciski naraz),
+//                  bez osobnego przycisku. "Odrzuć" zawsze widoczny na wierzchu
+//                  (niezależnie od zwinięcia). Paginacja bez zmian.
+// Poprzednia:      v2.30 (paginacja + zwiń/rozwiń akcje)
+// Git tag:         v2.31
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -2265,7 +2263,6 @@ function setDateFilter(type) {
 const MAIN_PAGE = 50
 let _mainLimit = MAIN_PAGE
 let _lastFilterSig = ''
-let _actionsOpen = new Set()
 let _mainObserver = null
 
 function loadMoreMain() { _mainLimit += MAIN_PAGE; renderMain() }
@@ -2276,17 +2273,6 @@ function setupMainSentinel() {
   if (!s) return
   _mainObserver = new IntersectionObserver(es => { if (es[0].isIntersecting) loadMoreMain() }, { rootMargin: '300px' })
   _mainObserver.observe(s)
-}
-
-function toggleActions(id) {
-  const wrap = document.getElementById('actions-' + id)
-  const btn  = document.getElementById('actbtn-' + id)
-  if (!wrap) return
-  const isOpen = wrap.style.display !== 'none'
-  wrap.style.display = isOpen ? 'none' : 'flex'
-  wrap.style.marginTop = isOpen ? '0' : '6px'
-  if (btn) btn.textContent = isOpen ? '⚙ Pokaż akcje' : '⚙ Ukryj akcje'
-  if (isOpen) _actionsOpen.delete(id); else _actionsOpen.add(id)
 }
 
 function renderMain() {
@@ -2489,9 +2475,9 @@ function renderMain() {
           onblur="savePostNote('${p.id}',this.value)">
       </div>
       <div class="card-foot">
-        <button class="btn" id="actbtn-${p.id}" onclick="toggleActions('${p.id}')" style="background:rgba(0,229,255,.08);border-color:rgba(0,229,255,.25)">${_actionsOpen.has(p.id) ? '⚙ Ukryj akcje' : '⚙ Pokaż akcje'}</button>
-        <div class="card-actions" id="actions-${p.id}" style="display:${_actionsOpen.has(p.id) ? 'flex' : 'none'};flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%;width:100%;margin-top:${_actionsOpen.has(p.id) ? '6px' : '0'}">
-          <button class="btn" id="bexp-${p.id}" onclick="toggleExpand('${p.id}')">Rozwiń</button>
+        <button class="btn" id="bexp-${p.id}" onclick="toggleExpand('${p.id}')">Rozwiń</button>
+        <button class="btn btn-danger ml-auto" onclick="setPostStatus('${p.id}','Odrzucone')">Odrzuć</button>
+        <div class="card-actions" id="actions-${p.id}" style="display:none;flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%;width:100%;margin-top:6px">
           <button class="btn" onclick="copyText(document.getElementById('orig-${p.id}').innerText)">Kopiuj oryginał</button>
           <button class="btn btn-info" onclick="copyText(document.getElementById('para-${p.id}').value)">Kopiuj parafrazę</button>
           <button class="btn" style="background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15);white-space:nowrap" onclick="copyAndOpenX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Kopiuj parafrazę i otwórz X">🐦 Publikuj na X</button>
@@ -2500,7 +2486,6 @@ function renderMain() {
           <button class="btn" onclick="reminderFromPost('${p.id}')" title="Utwórz przypomnienie z tego wpisu">🔔 Przypomnij</button>
           <button class="btn btn-success" onclick="addToProjects('${p.id}')" title="Dodaj do zakładki Projekty">🪂 Dodaj do Projektów</button>
           <button class="btn" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#10b981;white-space:nowrap" onclick="openTodoFromPost('${p.id}')">📋 Dodaj do TODO</button>
-          <button class="btn btn-danger ml-auto" onclick="setPostStatus('${p.id}','Odrzucone')">Odrzuć</button>
         </div>
       </div>
     </div>`
@@ -2804,13 +2789,13 @@ function toggleExpand(id) {
   const o = document.getElementById('orig-'+id)
   const p = document.getElementById('para-'+id)
   const b = document.getElementById('bexp-'+id)
+  const acts = document.getElementById('actions-'+id)
   if (!o) return
   const ex = o.classList.contains('expanded')
   if (!ex) {
-    // Rozwijamy: oblicz naturalną wysokość obu i ustaw obu tę samą (maksimum)
+    // Rozwijamy: tekst + przyciski akcji
     o.classList.add('expanded')
     if (p) p.classList.add('expanded')
-    // Synchronizuj wysokość - ustaw min-height na wyższy z dwóch
     requestAnimationFrame(() => {
       const hO = o.scrollHeight
       const hP = p ? p.scrollHeight : 0
@@ -2818,11 +2803,13 @@ function toggleExpand(id) {
       o.style.maxHeight = maxH + 'px'
       if (p) p.style.minHeight = maxH + 'px'
     })
+    if (acts) acts.style.display = 'flex'
   } else {
-    // Zwijamy: usuń styl i klasę
+    // Zwijamy: tekst + przyciski akcji
     o.classList.remove('expanded')
     o.style.maxHeight = ''
     if (p) { p.classList.remove('expanded'); p.style.minHeight = '' }
+    if (acts) acts.style.display = 'none'
   }
   if (b) b.textContent = ex ? 'Rozwiń' : 'Zwiń'
 }
@@ -6533,7 +6520,7 @@ Object.assign(window, {
   translatePost, reminderFromPost, saveReminderFromPost, previewAsX, previewMyPost, saveXHandle, closeAppModal,
   savePromptCfg, resetPromptCfg,
   exportBackup, triggerImportBackup, importBackupFile,
-  toggleActions, loadMoreMain,
+  loadMoreMain,
   generateImageForPost, regenImage, downloadImage,
 })
 
