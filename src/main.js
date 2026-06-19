@@ -1,13 +1,15 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.29
+// Wersja:          v2.30
 // Data:            2026-06-19
-// Zmiany:          Grupa "karta" pod-krok 1: SWIPE w lewo = Odrzuć (tylko karty
-//                  Wpisów, przez delegację — renderMain NIETKNIĘTY) + toast "↩ Cofnij"
-//                  (6 s) przywracający poprzedni status. Reużywa setPostStatus
-//                  (zapis do rejectedIndex bez zmian).
-// Poprzednia:      v2.28 (backup + licznik znaków)
-// Git tag:         v2.29
+// Zmiany:          Grupa "karta" pod-krok 2 (renderowanie w renderMain — logika
+//                  filtrów/sortowania/duplikatów NIETKNIĘTA): PAGINACJA listy wpisów
+//                  (pokazuje 50, dociąga po 50 przy scrollu + przycisk "Pokaż więcej";
+//                  reset do 50 przy zmianie filtrów). ZWIŃ/ROZWIŃ akcje na karcie —
+//                  przyciski akcji domyślnie zwinięte (widać "⚙ Pokaż akcje"), klik
+//                  pokazuje wszystkie; stan w Set, przełączanie = samo CSS.
+// Poprzednia:      v2.29 (swipe + Cofnij)
+// Git tag:         v2.30
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -2259,6 +2261,34 @@ function setDateFilter(type) {
 }
 
 // ── RENDER: MAIN ──────────────────────────────────────────────────
+// ── PAGINACJA LISTY WPISÓW + ZWIŃ/ROZWIŃ AKCJE ────────────────────
+const MAIN_PAGE = 50
+let _mainLimit = MAIN_PAGE
+let _lastFilterSig = ''
+let _actionsOpen = new Set()
+let _mainObserver = null
+
+function loadMoreMain() { _mainLimit += MAIN_PAGE; renderMain() }
+
+function setupMainSentinel() {
+  const s = document.getElementById('main-sentinel')
+  if (_mainObserver) { _mainObserver.disconnect(); _mainObserver = null }
+  if (!s) return
+  _mainObserver = new IntersectionObserver(es => { if (es[0].isIntersecting) loadMoreMain() }, { rootMargin: '300px' })
+  _mainObserver.observe(s)
+}
+
+function toggleActions(id) {
+  const wrap = document.getElementById('actions-' + id)
+  const btn  = document.getElementById('actbtn-' + id)
+  if (!wrap) return
+  const isOpen = wrap.style.display !== 'none'
+  wrap.style.display = isOpen ? 'none' : 'flex'
+  wrap.style.marginTop = isOpen ? '0' : '6px'
+  if (btn) btn.textContent = isOpen ? '⚙ Pokaż akcje' : '⚙ Ukryj akcje'
+  if (isOpen) _actionsOpen.delete(id); else _actionsOpen.add(id)
+}
+
 function renderMain() {
   // Pobierz aktualne wartości filtrów z DOM (FIX: filtry)
   const selAcc = document.getElementById('f-account')
@@ -2292,6 +2322,10 @@ function renderMain() {
   if (inpDateTo)    fDateTo    = inpDateTo.value
   if (inpOlderDays) fOlderDays = inpOlderDays.value
   if (chkDupes)     fDupes     = chkDupes.checked
+
+  // Reset paginacji przy zmianie filtrów (każda zmiana → wracamy na początek listy)
+  const _sig = [fAccount,fStatus,fType,fSearch,fExclude,fExcludeMode,fMaxLines,fMinLines,fMaxChars,fNoLinks,fNoMedia,fDateFrom,fDateTo,fOlderDays,fDupes].join('|')
+  if (_sig !== _lastFilterSig) { _mainLimit = MAIN_PAGE; _lastFilterSig = _sig }
 
   // Wykryj duplikaty — wpisy z tym samym początkiem tekstu (pierwsze 60 znaków)
   const dupeSet = new Set()
@@ -2390,12 +2424,12 @@ function renderMain() {
 
   // Aktualizuj licznik w panelu
   const panelCount = document.getElementById('main-panel-count')
-  if (panelCount) panelCount.textContent = `Widocznych wpisów: ${list.length}`
+  if (panelCount) panelCount.textContent = `Widocznych wpisów: ${Math.min(_mainLimit, list.length)} z ${list.length}`
 
   // Bulk bar — pokaż/ukryj
   updateMainBulkBar()
 
-  el.innerHTML = list.map(p => {
+  el.innerHTML = list.slice(0, _mainLimit).map(p => {
     // Linki z posta
     const linksH = p.links?.length
       ? `<div class="card-links"><span style="font-size:11px;color:var(--text3)">Linki:</span>
@@ -2455,19 +2489,25 @@ function renderMain() {
           onblur="savePostNote('${p.id}',this.value)">
       </div>
       <div class="card-foot">
-        <button class="btn" id="bexp-${p.id}" onclick="toggleExpand('${p.id}')">Rozwiń</button>
-        <button class="btn" onclick="copyText(document.getElementById('orig-${p.id}').innerText)">Kopiuj oryginał</button>
-        <button class="btn btn-info" onclick="copyText(document.getElementById('para-${p.id}').value)">Kopiuj parafrazę</button>
-        <button class="btn" style="background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15);white-space:nowrap" onclick="copyAndOpenX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Kopiuj parafrazę i otwórz X">🐦 Publikuj na X</button>
-        <button class="btn" onclick="previewAsX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Podgląd jak na X">👁 Podgląd</button>
-        <button class="btn" onclick="translatePost('${p.id}')" title="Przetłumacz na polski">🌐 Tłumacz</button>
-        <button class="btn" onclick="reminderFromPost('${p.id}')" title="Utwórz przypomnienie z tego wpisu">🔔 Przypomnij</button>
-        <button class="btn btn-success" onclick="addToProjects('${p.id}')" title="Dodaj do zakładki Projekty">🪂 Dodaj do Projektów</button>
-        <button class="btn" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#10b981;white-space:nowrap" onclick="openTodoFromPost('${p.id}')">📋 Dodaj do TODO</button>
-        <button class="btn btn-danger ml-auto" onclick="setPostStatus('${p.id}','Odrzucone')">Odrzuć</button>
+        <button class="btn" id="actbtn-${p.id}" onclick="toggleActions('${p.id}')" style="background:rgba(0,229,255,.08);border-color:rgba(0,229,255,.25)">${_actionsOpen.has(p.id) ? '⚙ Ukryj akcje' : '⚙ Pokaż akcje'}</button>
+        <div class="card-actions" id="actions-${p.id}" style="display:${_actionsOpen.has(p.id) ? 'flex' : 'none'};flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%;width:100%;margin-top:${_actionsOpen.has(p.id) ? '6px' : '0'}">
+          <button class="btn" id="bexp-${p.id}" onclick="toggleExpand('${p.id}')">Rozwiń</button>
+          <button class="btn" onclick="copyText(document.getElementById('orig-${p.id}').innerText)">Kopiuj oryginał</button>
+          <button class="btn btn-info" onclick="copyText(document.getElementById('para-${p.id}').value)">Kopiuj parafrazę</button>
+          <button class="btn" style="background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15);white-space:nowrap" onclick="copyAndOpenX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Kopiuj parafrazę i otwórz X">🐦 Publikuj na X</button>
+          <button class="btn" onclick="previewAsX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Podgląd jak na X">👁 Podgląd</button>
+          <button class="btn" onclick="translatePost('${p.id}')" title="Przetłumacz na polski">🌐 Tłumacz</button>
+          <button class="btn" onclick="reminderFromPost('${p.id}')" title="Utwórz przypomnienie z tego wpisu">🔔 Przypomnij</button>
+          <button class="btn btn-success" onclick="addToProjects('${p.id}')" title="Dodaj do zakładki Projekty">🪂 Dodaj do Projektów</button>
+          <button class="btn" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#10b981;white-space:nowrap" onclick="openTodoFromPost('${p.id}')">📋 Dodaj do TODO</button>
+          <button class="btn btn-danger ml-auto" onclick="setPostStatus('${p.id}','Odrzucone')">Odrzuć</button>
+        </div>
       </div>
     </div>`
-  }).join('')
+  }).join('') + (list.length > _mainLimit
+    ? `<button id="main-sentinel" class="btn" style="margin:16px auto 24px;display:block" onclick="loadMoreMain()">Pokaż więcej (${list.length - _mainLimit} pozostałych)</button>`
+    : '')
+  setupMainSentinel()
 }
 
 // ── DODAJ WPIS DO PROJEKTÓW (AI) ─────────────────────────────────
@@ -6493,6 +6533,7 @@ Object.assign(window, {
   translatePost, reminderFromPost, saveReminderFromPost, previewAsX, previewMyPost, saveXHandle, closeAppModal,
   savePromptCfg, resetPromptCfg,
   exportBackup, triggerImportBackup, importBackupFile,
+  toggleActions, loadMoreMain,
   generateImageForPost, regenImage, downloadImage,
 })
 
