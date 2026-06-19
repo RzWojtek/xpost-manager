@@ -1,13 +1,15 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.34
+// Wersja:          v2.35
 // Data:            2026-06-19
-// Zmiany:          #5 poprawka: udostępniony link z X wstawiany do pola „Importuj
-//                  wpis z X" (id import-x-url) zamiast ręcznego formularza — wtedy
-//                  jeden klik „Pobierz z X" ściąga cały wpis przez VPS. Link czyszczony
-//                  z parametrów śledzących, pole focusowane i przewijane do widoku.
-// Poprzednia:      v2.33 (#5 share target — pierwsza wersja)
-// Git tag:         v2.34
+// Zmiany:          Import z X ("Pobierz z X") → zapis jako SZKIC w "Dodaj ręcznie"
+//                  (manualDrafts, badge "🐦 Z X") zamiast prosto do Wpisów. Szkic z X
+//                  zachowuje linki/zdjęcia, a sendDraftToWpisy je przenosi przy wysyłce.
+//                  WYMAGA równoczesnego wgrania poprawionych plików VPS (fetch_tweet.py
+//                  + main.py): pełna treść długich tweetów (note_tweet) + zwracanie
+//                  danych zamiast zapisu do posts.
+// Poprzednia:      v2.34 (#5 share target → pole importu)
+// Git tag:         v2.35
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -5481,6 +5483,7 @@ function renderManualDrafts() {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
         <span style="font-size:11px;color:var(--text3)">📅 ${d.addedAt||''}</span>
         ${d.fromImage ? '<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:rgba(0,229,255,.1);color:var(--neon);border:1px solid rgba(0,229,255,.2)">📸 Ze zdjęcia</span>' : ''}
+        ${d.fromX ? '<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:rgba(29,161,242,.12);color:#1da1f2;border:1px solid rgba(29,161,242,.25)">🐦 Z X</span>' : ''}
         <div style="display:flex;gap:4px;margin-left:auto;flex-wrap:wrap">
           ${editing
             ? `<button class="btn btn-primary" style="font-size:11px;padding:3px 8px" onclick="saveDraftEdit('${docId}')">💾 Zapisz</button>
@@ -5533,7 +5536,7 @@ async function sendDraftToWpisy(docId) {
     id, account: d.account || 'ręczny',
     xDate: now, xLink: d.xLink || '',
     text: d.text.trim(),
-    links: [], imgs: [], isRT: false,
+    links: d.links || [], imgs: d.imgs || [], isRT: false,
     para: '', note: d.note || '',
     status: 'Nowy', addedAt: now, manualEntry: true
   }
@@ -6469,9 +6472,24 @@ async function importFromX() {
     })
     const data = await res.json()
     if (!res.ok || !data.success) throw new Error(data.detail || data.error || 'Nieznany błąd')
+    // Zapisz jako SZKIC (manualDrafts) — NIE prosto do Wpisów
+    const docId = 'mdraft_' + uid()
+    const entry = {
+      id: docId,
+      text: data.text || '',
+      account: (data.account || '').replace(/^@/, ''),
+      xLink: data.xLink || url,
+      links: data.links || [],
+      imgs: data.imgs || [],
+      note: '',
+      addedAt: nowStr(),
+      fromX: true
+    }
+    await setDoc(doc(db, 'manualDrafts', docId), entry)
+    manualDrafts[docId] = entry
     if (input) input.value = ''
-    toast('✅ Pobrano wpis od ' + data.account)
-    renderMain(); updateBadges()
+    renderManualDrafts(); updateManualDraftsBadge()
+    toast('✅ Pobrano jako szkic od @' + entry.account)
   } catch(err) {
     toast('❌ Błąd importu: ' + err.message)
   } finally {
