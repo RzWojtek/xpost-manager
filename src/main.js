@@ -1,13 +1,16 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.26
-// Data:            2026-06-17
-// Zmiany:          🖼 Obrazek na karcie wpisu: parafraza → opis wizualny (AI, prompt
-//                  'image') → obrazek przez Pollinations.ai (darmowe, BEZ klucza) w
-//                  modalu (Pobierz / Regeneruj). 4. edytowalny prompt "opis obrazu"
-//                  w Ustawieniach. Bez instalacji po stronie usera (brak klucza/env).
-// Poprzednia:      v2.25 (generator wątku + edytowalne prompty)
-// Git tag:         v2.26
+// Wersja:          v2.27
+// Data:            2026-06-19
+// Zmiany:          WYDAJNOŚĆ: loadAll ładuje tylko aktywne wpisy (where status !=
+//                  'Odrzucone') zamiast wszystkich ~5700 → ~93% mniej odczytów Firebase.
+//                  Odrzucone id trzymane w lekkim indeksie 'rejectedIndex' (shardy);
+//                  po wczytaniu zasiewane jako zaślepki do `posts`, więc syncSheets
+//                  działa BEZ ZMIAN (anty-duplikat nienaruszony). Błąd wczytania
+//                  indeksu zatrzymuje loadAll → sync nie startuje (ochrona). Zapis id
+//                  do indeksu przy odrzucaniu (setPostStatus + deleteMainSelected).
+// Poprzednia:      v2.26 (🖼 generowanie obrazków)
+// Git tag:         v2.27
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -1827,13 +1830,73 @@ async function logout() {
   await signOut(auth)
 }
 
+// ── INDEKS ODRZUCONYCH (rejectedIndex) ────────────────────────────
+// Trzyma SAME ID odrzuconych w lekkich shardach. Po wczytaniu zasiewa
+// do `posts` maleńkie zaślepki {id, status:'Odrzucone'} — dzięki temu
+// syncSheets (sprawdzający `posts[id]`) działa BEZ ŻADNEJ zmiany.
+// Jeśli indeks się NIE wczyta — rzucamy błąd, co zatrzymuje loadAll i
+// NIE pozwala uruchomić synchronizacji (ochrona przed duplikatami).
+let _rejShardCount = 0
+let _rejTopSize    = 0
+const REJ_SHARD_CAP = 4000
+
+async function loadRejectedIndex() {
+  let lastErr
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const meta = await getDoc(doc(db, 'rejectedIndex', 'meta'))
+      const shardCount = meta.exists() ? (meta.data().shardCount || 0) : 0
+      let topSize = 0
+      for (let i = 0; i < shardCount; i++) {
+        const sd = await getDoc(doc(db, 'rejectedIndex', `shard_${i}`))
+        const ids = sd.exists() ? (sd.data().ids || {}) : {}
+        let cnt = 0
+        for (const id in ids) {
+          cnt++
+          if (!posts[id]) posts[id] = { id, status: 'Odrzucone', _stub: true }
+        }
+        if (i === shardCount - 1) topSize = cnt
+      }
+      _rejShardCount = shardCount
+      _rejTopSize = topSize
+      return
+    } catch (e) {
+      lastErr = e
+      console.warn(`[rejectedIndex] próba ${attempt} nieudana:`, e?.message)
+      await new Promise(r => setTimeout(r, 800 * attempt))
+    }
+  }
+  throw new Error('Nie udało się wczytać indeksu odrzuconych — synchronizacja wstrzymana dla bezpieczeństwa. Odśwież stronę. (' + (lastErr?.message || '') + ')')
+}
+
+async function addRejectedToIndex(id) {
+  // Brak indeksu (świeża baza) — utwórz shard_0 + meta
+  if (_rejShardCount === 0) {
+    await setDoc(doc(db, 'rejectedIndex', 'shard_0'), { ids: { [id]: true } }, { merge: true })
+    await setDoc(doc(db, 'rejectedIndex', 'meta'), { shardCount: 1, updatedAt: new Date().toISOString() }, { merge: true })
+    _rejShardCount = 1; _rejTopSize = 1
+    return
+  }
+  // Ostatni shard pełny — załóż nowy
+  if (_rejTopSize >= REJ_SHARD_CAP) {
+    const newIdx = _rejShardCount
+    await setDoc(doc(db, 'rejectedIndex', `shard_${newIdx}`), { ids: { [id]: true } })
+    await setDoc(doc(db, 'rejectedIndex', 'meta'), { shardCount: newIdx + 1, updatedAt: new Date().toISOString() }, { merge: true })
+    _rejShardCount = newIdx + 1; _rejTopSize = 1
+    return
+  }
+  // Dopisz do ostatniego sharda (merge nie nadpisuje pozostałych id)
+  await setDoc(doc(db, 'rejectedIndex', `shard_${_rejShardCount - 1}`), { ids: { [id]: true } }, { merge: true })
+  _rejTopSize++
+}
+
 // ── FIREBASE LOAD ─────────────────────────────────────────────────
 async function loadAll() {
   posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}; aiTools = {}; manualDrafts = {}
   // TG dane — ładowane przy starcie z limitem tgAutoLoad (domyślnie 15)
   const tgLimit = tgAutoLoad || 15
   const [ps, ms, rs, ns, ks, at, cfg, ait, md, dt, tgs, tgw] = await Promise.all([
-    getDocs(query(collection(db,'posts'),         orderBy('xDate','desc'))),
+    getDocs(query(collection(db,'posts'),         where('status','!=','Odrzucone'))),
     getDocs(query(collection(db,'myPosts'),       orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
     getDocs(query(collection(db,'notes'),         orderBy('created','desc'))),
@@ -1865,6 +1928,8 @@ async function loadAll() {
     if (data.postStatuses?.length)          POST_STATUSES = data.postStatuses
     if (data.tgAutoLoad !== undefined)      tgAutoLoad  = parseInt(data.tgAutoLoad) || 15
   }
+  // Zasiej zaślepki odrzuconych (chroni syncSheets). Błąd tu ZATRZYMUJE loadAll.
+  await loadRejectedIndex()
 }
 
 // ── SHEETS SYNC ───────────────────────────────────────────────────
@@ -2458,7 +2523,8 @@ async function deleteMainSelected() {
   if (!n) return
   if (!confirm(`Odrzucić ${n} zaznaczonych wpisów?`)) return
   const ids = [...mainSelected]
-  await Promise.all(ids.map(id => {
+  await Promise.all(ids.map(async id => {
+    await addRejectedToIndex(id)
     posts[id].status = 'Odrzucone'
     return updateDoc(doc(db, 'posts', id), { status: 'Odrzucone' })
   }))
@@ -2512,6 +2578,7 @@ async function setPostStatus(id, status) {
   posts[id].status = status
   const upd = { status }
   if (status === 'Opublikowane') { posts[id].archivedAt = nowStr(); upd.archivedAt = posts[id].archivedAt }
+  if (status === 'Odrzucone') await addRejectedToIndex(id)   // zapisz id do indeksu PRZED zmianą statusu
   await updateDoc(doc(db,'posts',id), upd)
   if (status === 'Opublikowane') toast('Przeniesiono do Archiwum ✓')
   renderMain(); updateStats(); updateBadges()
