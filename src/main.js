@@ -1,13 +1,13 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.28
+// Wersja:          v2.29
 // Data:            2026-06-19
-// Zmiany:          Grupa 1 (Ustawienia, bez dotykania renderMain/syncSheets/loadAll):
-//                  💾 Backup całej bazy do JSON + 📥 Import z JSON (nadpis po ID,
-//                  z potwierdzeniem). Licznik zaznaczonych znaków w polach parafrazy
-//                  (pływający badge).
-// Poprzednia:      v2.27 (wydajność: indeks odrzuconych)
-// Git tag:         v2.28
+// Zmiany:          Grupa "karta" pod-krok 1: SWIPE w lewo = Odrzuć (tylko karty
+//                  Wpisów, przez delegację — renderMain NIETKNIĘTY) + toast "↩ Cofnij"
+//                  (6 s) przywracający poprzedni status. Reużywa setPostStatus
+//                  (zapis do rejectedIndex bez zmian).
+// Poprzednia:      v2.28 (backup + licznik znaków)
+// Git tag:         v2.29
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -575,6 +575,71 @@ async function importBackupFile(input) {
   } catch (e) {
     setSt('❌ Błąd importu: ' + (e?.message || e))
   }
+}
+
+// ── SWIPE W LEWO = ODRZUĆ (+ Cofnij) ──────────────────────────────
+// Tylko karty Wpisów (id "card-..."). Działa przez delegację — NIE rusza renderMain.
+async function rejectWithUndo(id) {
+  if (!posts[id] || posts[id].status === 'Odrzucone') return
+  const prev = posts[id].status || 'Nowy'
+  await setPostStatus(id, 'Odrzucone')        // istniejąca funkcja: zapis do indeksu + re-render
+  showUndoToast(id, prev)
+}
+async function undoReject(id, prev) {
+  if (!posts[id]) return
+  await setPostStatus(id, prev)               // przywraca poprzedni status (id zostaje w indeksie — nieszkodliwe)
+  toast('Przywrócono wpis ✓')
+}
+let _undoTimer = null
+function showUndoToast(id, prev) {
+  clearTimeout(_undoTimer)
+  let t = document.getElementById('undo-toast')
+  if (!t) {
+    t = document.createElement('div')
+    t.id = 'undo-toast'
+    t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:10000;background:#23233a;border:1px solid var(--neon);color:var(--text);padding:10px 16px;border-radius:10px;display:flex;align-items:center;gap:14px;box-shadow:0 4px 20px rgba(0,0,0,.5);font-size:14px'
+    document.body.appendChild(t)
+  }
+  t.innerHTML = `<span>Odrzucono wpis</span><button id="undo-btn" style="background:var(--neon);color:#0a0a14;border:none;border-radius:6px;padding:5px 12px;font-weight:700;cursor:pointer">↩ Cofnij</button>`
+  t.style.display = 'flex'
+  const btn = document.getElementById('undo-btn')
+  if (btn) btn.onclick = async () => { t.style.display = 'none'; clearTimeout(_undoTimer); await undoReject(id, prev) }
+  _undoTimer = setTimeout(() => { if (t) t.style.display = 'none' }, 6000)
+}
+
+function initSwipeReject() {
+  let startX = 0, startY = 0, card = null, dragging = false
+  document.addEventListener('touchstart', e => {
+    const c = e.target.closest('.card')
+    if (!c || !c.id || !c.id.startsWith('card-')) { card = null; return }          // tylko karty Wpisów
+    if (e.target.closest('textarea,button,select,input,a')) { card = null; return } // nie przeszkadzaj w klikaniu
+    card = c; startX = e.touches[0].clientX; startY = e.touches[0].clientY; dragging = false
+  }, { passive: true })
+  document.addEventListener('touchmove', e => {
+    if (!card) return
+    const dx = e.touches[0].clientX - startX
+    const dy = e.touches[0].clientY - startY
+    if (Math.abs(dy) > Math.abs(dx)) { card.style.transform = ''; card.style.opacity = ''; card = null; return } // pionowy scroll
+    if (dx < 0) {
+      dragging = true
+      card.style.transform = `translateX(${dx}px)`
+      card.style.opacity = String(Math.max(0.3, 1 + dx / 300))
+    }
+  }, { passive: true })
+  document.addEventListener('touchend', e => {
+    if (!card) return
+    const c = card; card = null
+    const dx = (e.changedTouches[0] ? e.changedTouches[0].clientX : startX) - startX
+    c.style.transition = 'transform .2s ease, opacity .2s ease'
+    if (dragging && dx < -90) {                    // wystarczająco daleko w lewo → odrzuć
+      const id = c.id.replace('card-', '')
+      c.style.transform = 'translateX(-110%)'; c.style.opacity = '0'
+      setTimeout(() => { rejectWithUndo(id) }, 160)
+    } else {
+      c.style.transform = ''; c.style.opacity = ''
+    }
+    setTimeout(() => { if (c) c.style.transition = '' }, 260)
+  }, { passive: true })
 }
 
 // ── LICZNIK ZAZNACZONYCH ZNAKÓW (w polach parafrazy) ──────────────
@@ -6898,6 +6963,7 @@ onAuthStateChanged(auth, async user => {
     // Wczytaj edytowalne prompty AI z Firestore (fallback do domyślnych, gdy brak)
     try { loadPromptCfg() } catch(_) {}
     try { initSelectionCounter() } catch(_) {}
+    try { initSwipeReject() } catch(_) {}
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
