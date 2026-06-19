@@ -1,13 +1,14 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.31
+// Wersja:          v2.32
 // Data:            2026-06-19
-// Zmiany:          Poprawka UX karty: zwijanie/rozwijanie akcji przejęte przez
-//                  istniejący przycisk "Rozwiń/Zwiń" (rozwija tekst I przyciski naraz),
-//                  bez osobnego przycisku. "Odrzuć" zawsze widoczny na wierzchu
-//                  (niezależnie od zwinięcia). Paginacja bez zmian.
-// Poprzednia:      v2.30 (paginacja + zwiń/rozwiń akcje)
-// Git tag:         v2.31
+// Zmiany:          #6 Auto-ekstrakcja linków: przycisk "🔗 Kopiuj reflink" na karcie
+//                  → modal z linkami wyciągniętymi z wpisu (p.links + URL z treści),
+//                  checkboxy + nazwa projektu → zapis do refLinks z flagą autoImported.
+//                  W zakładce Linki ref takie pozycje są podświetlone (bursztyn) z
+//                  etykietą "⚠ Podmień ref"; edycja linku czyści flagę.
+// Poprzednia:      v2.31 (karta: Rozwiń steruje akcjami, Odrzuć zawsze widoczny)
+// Git tag:         v2.32
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -2173,6 +2174,51 @@ function switchSubTab(name) {
 }
 
 // ── REF CHIPS ─────────────────────────────────────────────────────
+// ── AUTO-EKSTRAKCJA LINKÓW Z WPISU → Linki ref ────────────────────
+function openRefLinkModal(postId) {
+  const p = posts[postId]
+  if (!p) return
+  const fromArr  = (p.links || [])
+  const fromText = (p.text || '').match(/https?:\/\/[^\s"'<>)]+/g) || []
+  const links = [...new Set([...fromArr, ...fromText].map(s => String(s).trim()).filter(Boolean))]
+  if (!links.length) { toast('Brak linków w tym wpisie'); return }
+  const rows = links.map(l => `
+    <label style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--border);border-radius:var(--r);margin-bottom:6px;cursor:pointer">
+      <input type="checkbox" class="rl-chk" value="${l.replace(/"/g,'&quot;')}" checked style="margin-top:3px;accent-color:var(--neon5)">
+      <span style="font-size:12px;word-break:break-all;color:var(--text2)">${l.replace(/</g,'&lt;')}</span>
+    </label>`).join('')
+  openAppModal(`
+    <div style="font-weight:700;font-size:15px;margin-bottom:4px">🔗 Zapisz linki do „Linki ref"</div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Zaznacz linki do zapisania. Trafią do zakładki <b>Linki ref</b> oznaczone <span style="color:#f59e0b">⚠ Podmień ref</span> — pamiętaj podmienić na swój własny ref.</div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:4px">Nazwa projektu</div>
+    <input id="rl-project" class="form-input" placeholder="np. DustSwap" style="width:100%;margin-bottom:12px">
+    ${rows}
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-primary" onclick="saveAutoRefLinks('${postId}')">Zapisz zaznaczone</button>
+      <button class="btn" onclick="closeAppModal()">Anuluj</button>
+    </div>
+  `, 560)
+}
+
+async function saveAutoRefLinks(postId) {
+  const project = (document.getElementById('rl-project')?.value || '').trim()
+  const checks  = [...document.querySelectorAll('.rl-chk:checked')].map(c => c.value)
+  if (!checks.length) { toast('Nie zaznaczono żadnego linku'); return }
+  const p = posts[postId]
+  const baseName = project || (p?.account ? '@' + p.account : 'Auto-import')
+  let n = 0
+  for (const url of checks) {
+    const id = uid()
+    const ref = { id, name: baseName, url, note: '⚠ Podmień na swój ref', autoImported: true, addedAt: nowStr() }
+    await setDoc(doc(db, 'refLinks', id), ref)
+    refLinks[id] = ref
+    n++
+  }
+  closeAppModal()
+  renderRef(); updateBadges(); refreshRefInOtherTabs()
+  toast(`Zapisano ${n} link(i) do Linki ref ✓`)
+}
+
 function refLinksHtml(postId) {
   const list = Object.values(refLinks)
   if (!list.length) return ''
@@ -2486,6 +2532,7 @@ function renderMain() {
           <button class="btn" onclick="reminderFromPost('${p.id}')" title="Utwórz przypomnienie z tego wpisu">🔔 Przypomnij</button>
           <button class="btn btn-success" onclick="addToProjects('${p.id}')" title="Dodaj do zakładki Projekty">🪂 Dodaj do Projektów</button>
           <button class="btn" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#10b981;white-space:nowrap" onclick="openTodoFromPost('${p.id}')">📋 Dodaj do TODO</button>
+          <button class="btn" style="background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:#f59e0b;white-space:nowrap" onclick="openRefLinkModal('${p.id}')" title="Wyciągnij linki z wpisu do zakładki Linki ref">🔗 Kopiuj reflink</button>
         </div>
       </div>
     </div>`
@@ -3202,7 +3249,8 @@ function renderRef() {
   if(!list.length){el.innerHTML='<div class="empty">Brak linków referencyjnych.</div>';return}
   el.innerHTML = list.map(r=>{
     const editing=!!r._editing
-    return `<div class="ref-card" id="refcard-${r.id}">
+    const auto=!!r.autoImported
+    return `<div class="ref-card" id="refcard-${r.id}" style="${auto&&!editing?'border:1px solid #f59e0b;background:rgba(245,158,11,.06)':''}">
       ${editing ? `
         <div class="edit-form">
           <div><div class="form-label">Nazwa projektu</div>
@@ -3217,7 +3265,7 @@ function renderRef() {
           </div>
         </div>
       ` : `
-        <div class="ref-project">${r.name}</div>
+        <div class="ref-project">${r.name} ${auto?'<span style="font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(245,158,11,.18);color:#f59e0b;border:1px solid rgba(245,158,11,.4);font-weight:700">⚠ Podmień ref</span>':''}</div>
         <div class="ref-link-url">${r.url}</div>
         ${r.note ? `<div style="font-size:12px;color:var(--text3);margin:4px 0 6px;padding:4px 8px;background:var(--bg3);border-radius:var(--r)">📝 ${r.note}</div>` : ''}
         <div class="ref-actions">
@@ -3264,7 +3312,7 @@ async function saveRefEdit(id) {
   const url =document.getElementById(`re-url-${id}`)?.value.trim()||''
   const note=document.getElementById(`re-note-${id}`)?.value.trim()||''
   if(!name||!url){toast('Wypełnij oba pola!');return}
-  Object.assign(r,{name,url,note,_editing:false})
+  Object.assign(r,{name,url,note,autoImported:false,_editing:false})
   const save={...r};delete save._editing
   await setDoc(doc(db,'refLinks',id),save)
   toast('Zaktualizowano ✓'); renderRef(); refreshRefInOtherTabs()
@@ -6521,6 +6569,7 @@ Object.assign(window, {
   savePromptCfg, resetPromptCfg,
   exportBackup, triggerImportBackup, importBackupFile,
   loadMoreMain,
+  openRefLinkModal, saveAutoRefLinks,
   generateImageForPost, regenImage, downloadImage,
 })
 
