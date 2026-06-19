@@ -1,4 +1,4 @@
-const CACHE = 'xpost-v2'
+const CACHE = 'xpost-v3'
 const STATIC = ['/', '/index.html']
 
 self.addEventListener('install', e => {
