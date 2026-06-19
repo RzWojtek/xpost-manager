@@ -1,14 +1,14 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.32
+// Wersja:          v2.33
 // Data:            2026-06-19
-// Zmiany:          #6 Auto-ekstrakcja linków: przycisk "🔗 Kopiuj reflink" na karcie
-//                  → modal z linkami wyciągniętymi z wpisu (p.links + URL z treści),
-//                  checkboxy + nazwa projektu → zapis do refLinks z flagą autoImported.
-//                  W zakładce Linki ref takie pozycje są podświetlone (bursztyn) z
-//                  etykietą "⚠ Podmień ref"; edycja linku czyści flagę.
-// Poprzednia:      v2.31 (karta: Rozwiń steruje akcjami, Odrzuć zawsze widoczny)
-// Git tag:         v2.32
+// Zmiany:          #5 PWA Share Target: apka rejestruje się jako cel „Udostępnij" na
+//                  Androidzie (manifest share_target, GET). Udostępniony link/tekst
+//                  z X → przełączenie na „Dodaj ręcznie", otwarcie formularza i
+//                  wstawienie linku do pola. (Uwaga: X zwykle udostępnia sam LINK,
+//                  nie pełną treść tweeta.)
+// Poprzednia:      v2.32 (#6 auto-ekstrakcja linków)
+// Git tag:         v2.33
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -606,6 +606,30 @@ function showUndoToast(id, prev) {
   const btn = document.getElementById('undo-btn')
   if (btn) btn.onclick = async () => { t.style.display = 'none'; clearTimeout(_undoTimer); await undoReject(id, prev) }
   _undoTimer = setTimeout(() => { if (t) t.style.display = 'none' }, 6000)
+}
+
+// ── PWA SHARE TARGET (udostępnienie z X → Dodaj ręcznie) ──────────
+function handleShareTarget() {
+  const params = new URLSearchParams(location.search)
+  const url   = params.get('url')   || ''
+  const text  = params.get('text')  || ''
+  const title = params.get('title') || ''
+  const raw = (url || text || title || '').trim()
+  if (!raw) return
+  const m = (url || text || '').match(/https?:\/\/[^\s]+/)
+  const link = m ? m[0] : raw
+  // Wyczyść adres, żeby odświeżenie nie powtarzało akcji
+  try { history.replaceState(null, '', location.pathname) } catch(_) {}
+  // Przełącz na „Dodaj ręcznie", pokaż formularz, wypełnij link
+  try { switchTab('manual') } catch(_) {}
+  try { toggleManualForm(true) } catch(_) {}
+  setTimeout(() => {
+    const lf = document.getElementById('manual-link')
+    const tf = document.getElementById('manual-text')
+    if (lf) { lf.value = link; lf.focus() }
+    if (tf && text && text.trim() !== link) tf.value = text.trim()
+    toast('Link z udostępniania wstawiony ✓')
+  }, 120)
 }
 
 function initSwipeReject() {
@@ -7041,6 +7065,7 @@ onAuthStateChanged(auth, async user => {
     try { loadPromptCfg() } catch(_) {}
     try { initSelectionCounter() } catch(_) {}
     try { initSwipeReject() } catch(_) {}
+    try { handleShareTarget() } catch(_) {}
     // TG dane — brak automatycznego pollingu (TGBot zapisuje bezpośrednio do Firestore)
     // Użytkownik odświeża ręcznie przyciskiem w zakładce TG
   } else {
