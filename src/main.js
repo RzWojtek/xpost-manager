@@ -1,14 +1,13 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.33
+// Wersja:          v2.34
 // Data:            2026-06-19
-// Zmiany:          #5 PWA Share Target: apka rejestruje się jako cel „Udostępnij" na
-//                  Androidzie (manifest share_target, GET). Udostępniony link/tekst
-//                  z X → przełączenie na „Dodaj ręcznie", otwarcie formularza i
-//                  wstawienie linku do pola. (Uwaga: X zwykle udostępnia sam LINK,
-//                  nie pełną treść tweeta.)
-// Poprzednia:      v2.32 (#6 auto-ekstrakcja linków)
-// Git tag:         v2.33
+// Zmiany:          #5 poprawka: udostępniony link z X wstawiany do pola „Importuj
+//                  wpis z X" (id import-x-url) zamiast ręcznego formularza — wtedy
+//                  jeden klik „Pobierz z X" ściąga cały wpis przez VPS. Link czyszczony
+//                  z parametrów śledzących, pole focusowane i przewijane do widoku.
+// Poprzednia:      v2.33 (#5 share target — pierwsza wersja)
+// Git tag:         v2.34
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -617,19 +616,20 @@ function handleShareTarget() {
   const raw = (url || text || title || '').trim()
   if (!raw) return
   const m = (url || text || '').match(/https?:\/\/[^\s]+/)
-  const link = m ? m[0] : raw
+  const link = (m ? m[0] : raw).split('?')[0]   // bez parametrów śledzących
   // Wyczyść adres, żeby odświeżenie nie powtarzało akcji
   try { history.replaceState(null, '', location.pathname) } catch(_) {}
-  // Przełącz na „Dodaj ręcznie", pokaż formularz, wypełnij link
+  // Przełącz na „Dodaj ręcznie" i wstaw link do pola „Importuj wpis z X"
   try { switchTab('manual') } catch(_) {}
-  try { toggleManualForm(true) } catch(_) {}
   setTimeout(() => {
-    const lf = document.getElementById('manual-link')
-    const tf = document.getElementById('manual-text')
-    if (lf) { lf.value = link; lf.focus() }
-    if (tf && text && text.trim() !== link) tf.value = text.trim()
-    toast('Link z udostępniania wstawiony ✓')
-  }, 120)
+    const f = document.getElementById('import-x-url')
+    if (f) {
+      f.value = link
+      f.focus()
+      try { f.scrollIntoView({ behavior: 'smooth', block: 'center' }) } catch(_) {}
+    }
+    toast('Link wstawiony — kliknij „Pobierz z X" 📥')
+  }, 150)
 }
 
 function initSwipeReject() {
