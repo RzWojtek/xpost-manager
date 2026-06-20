@@ -1918,3 +1918,222 @@ STAN: TGBot wymaga ponownego logowania (rm tgbot_session.session && python3 logi
 ---
 
 *CONTEXT.md wygenerowany automatycznie na podstawie sesji. Aktualizuj po każdej większej zmianie.*
+
+
+# ════════════════════════════════════════════════════════════════
+# AKTUALIZACJA CONTEXT.md — wersje v2.22 → v2.36
+# (dopisz na końcu istniejącego CONTEXT.md; poprzednio opisane do v2.21)
+# ════════════════════════════════════════════════════════════════
+
+## SKRÓT: co się zmieniło od v2.21
+
+Największa zmiana to **przebudowa wydajności odczytu z Firebase (v2.27)** oparta na indeksie
+odrzuconych wpisów (`rejectedIndex`) — to jest najważniejsza rzecz do zrozumienia przy dalszej
+pracy. Poza tym: backup/restore, swipe-to-reject, paginacja, zwijane akcje na karcie,
+auto-ekstrakcja linków, PWA share target, import z X jako Szkic, globalne wyszukiwanie.
+
+Plik główny: `src/main.js`. Deploy: GitHub web UI → Vercel. VPS: `/root/vps-api/` (FastAPI,
+port 3099, proces PM2 `vps-api`, tunel `vps-api-tunnel`).
+
+---
+
+## NOWE KOLEKCJE FIREBASE (dopisz do listy)
+
+Pełna lista kolekcji (stan na v2.36):
+`posts, myPosts, notes, refLinks, konta, positions, reminders, airdropTasks, airdropConfig,
+dailyTasks, aiTools, emojis, config, fcmTokens, tgSignals, tgWpisy, manualDrafts, rejectedIndex`
+
+Nowe / istotne:
+- **`rejectedIndex`** — indeks SAMYCH ID odrzuconych wpisów (patrz sekcja WYDAJNOŚĆ niżej).
+  Dokumenty: `meta` `{shardCount, shardCap:4000, total, updatedAt}` + `shard_0`, `shard_1`, …
+  każdy `{ids: {"<tweetid>": true, …}}` (max 4000 ID na shard).
+- **`config/prompts`** — edytowalne prompty AI `{para, translate, thread, image}` (z v2.25/2.26).
+- **`manualDrafts`** — Szkice w „Dodaj ręcznie" `{id, text, account, xLink, note, addedAt,
+  links?, imgs?, fromImage?, fromX?}`.
+
+---
+
+## ═══ WYDAJNOŚĆ: indeks odrzuconych (v2.27) — NAJWAŻNIEJSZE ═══
+
+### Problem
+`loadAll` ładował WSZYSTKIE ~5700 postów przy każdym wejściu (w tym ~5636 „Odrzucone", które
+rosną codziennie i są wszędzie odfiltrowane). To zżerało limit odczytów Firebase i spowalniało.
+
+### Żelazna zasada (dlaczego nie wolno po prostu nie ładować odrzuconych)
+- `xparafbot` dopisuje nowe tweety na górę Arkusza Google (`insert_row index=2`), sprawdzając
+  wcześniej `is_already_in_sheets` po ID. **Arkusz rośnie w nieskończoność i NIGDY nie jest
+  przycinany.**
+- `syncSheets` (frontend) czyta CAŁY Arkusz przy każdej synchronizacji i pomija wiersz **tylko
+  gdy `posts[id]` istnieje w pamięci** (`if (!id || posts[id]) continue`).
+- ⇒ Każde ID odrzuconego tweeta musi być „znane" w `posts` **na zawsze** — inaczej `syncSheets`
+  doda je z powrotem jako „Nowy" (lawina duplikatów). **Czyszczenie starych odrzuconych jest
+  NIEBEZPIECZNE** (dopóki Arkusz nie jest przycinany).
+
+### Rozwiązanie (stub-seeding — `syncSheets` NIETKNIĘTY co do bajta)
+1. `loadAll` ładuje teraz tylko AKTYWNE: `getDocs(query(collection(db,'posts'),
+   where('status','!=','Odrzucone')))` → ~400 odczytów zamiast ~5700.
+   (renderMain i tak sortuje po `xDate` w JS, więc brak `orderBy` w zapytaniu jest OK.)
+2. Po załadowaniu aktywnych `loadAll` woła **`await loadRejectedIndex()`** (na końcu, WEWNĄTRZ
+   loadAll). Ta funkcja czyta `rejectedIndex/meta` + shardy i **zasiewa do `posts` maleńkie
+   zaślepki** `{id, status:'Odrzucone', _stub:true}` dla każdego odrzuconego ID.
+3. Dzięki zaślepkom `posts[id]` znów istnieje dla odrzuconych ⇒ `syncSheets` działa BEZ ZMIAN.
+   Zaślepki są wszędzie odfiltrowane (status === 'Odrzucone'), więc render/pamięć lecą w dół.
+4. **OCHRONA:** jeśli `loadRejectedIndex` nie wczyta indeksu (np. blip sieci), po 3 próbach
+   **rzuca błąd → przerywa `loadAll` → `await syncSheets()` i `setInterval` w
+   onAuthStateChanged się NIE wykonują** (brak `try/catch` wokół loadAll). Czyli przy
+   nieudanym wczytaniu indeksu sync w ogóle nie startuje = zero ryzyka duplikatów.
+5. Zapis ID do indeksu przy odrzucaniu:
+   - `setPostStatus(id, status)` — dodana JEDNA linia: `if (status === 'Odrzucone') await
+     addRejectedToIndex(id)` PRZED `updateDoc` (bezpieczna kolejność: gdyby zapis indeksu padł,
+     wpis zostaje aktywny, a nie „odrzucony-bez-indeksu").
+   - `deleteMainSelected` (zbiorcze odrzucanie) — woła `addRejectedToIndex(id)` w pętli.
+   - `addRejectedToIndex(id)`: dopisuje ID do ostatniego sharda (merge), zakłada nowy shard po
+     przekroczeniu 4000 (`REJ_SHARD_CAP`), aktualizuje `meta.shardCount`.
+
+### Cofanie odrzucenia (swipe undo, v2.29)
+`undoReject` przywraca poprzedni status, ale **NIE usuwa ID z `rejectedIndex`** — to celowo i
+nieszkodliwe: przy następnym loadAll aktywny post załaduje się normalnie (`where != Odrzucone`),
+a zaślepka go nie nadpisze (`if (!posts[id])`). Indeks samoczyści się przy ewentualnym
+przebudowaniu (`build_rejected_index.py` buduje z aktualnych Odrzuconych).
+
+### Migracja (jednorazowa, wykonana — VPS, Admin SDK)
+- `backup_posts.py` — backup kolekcji `posts` do JSON (siatka bezpieczeństwa, wykonana PRZED).
+- `build_rejected_index.py` — zbudował `rejectedIndex` z istniejących Odrzuconych
+  (`where('status','==','Odrzucone')` → shardy). **Idempotentny, można uruchomić ponownie** —
+  przebuduje indeks z aktualnego stanu (np. gdyby in-app zapis kiedyś zawiódł).
+- Stan po migracji: `meta.total` ≈ 5636 (rośnie), 2 shardy.
+
+### DECYZJA: leniwe ładowanie per zakładka — ODRZUCONE
+Rozważone i świadomie pominięte: pozostałe kolekcje już ładują się równolegle (jeden
+`Promise.all`), a bottleneckiem są `posts` + `rejectedIndex` (eager tak czy siak). Odroczenie
+reszty nie skraca startu, a ruszałoby `loadAll` (strefa deduplikatu) i psuło liczniki zakładek.
+Nie warto.
+
+---
+
+## ═══ POZOSTAŁE WERSJE (v2.22 → v2.36) ═══
+
+### v2.22–v2.26 (część w poprzednich sesjach)
+- **v2.22–2.23:** eksperyment z ikonami menu (Tabler, dolna nawigacja) — COFNIĘTY (lekcja: nie
+  przeprojektowywać nawigacji bez prośby). Zakładka **Portfel** (`positions`): formularze per typ
+  (stake/depozyt/lp/airdrop/portfel/inne), powtarzalne wiersze portfeli, auto-suma, eksport CSV.
+- **v2.24:** reużywalny modal `openAppModal/closeAppModal`. Przyciski na karcie: 🌐 Tłumacz
+  (popup), 🔔 Przypomnij (`reminders`), 👁 Podgląd (karta w stylu X). `callModelApi` z opcjonalnym
+  `promptPrefix`.
+- **v2.25:** generator 🧵 Wątek (`THREAD_PROMPT`, dzielenie robi PROMPT, nie algorytm, bez
+  numeracji). Edytowalne prompty w Ustawieniach → `config/prompts` (para/translate/thread).
+- **v2.26:** 🖼 Obrazek na karcie → parafraza → opis wizualny (prompt 'image') → Pollinations.ai
+  (darmowe, bez klucza), modal Pobierz/Regeneruj. UWAGA: stała OCR nazywała się `IMAGE_PROMPT`;
+  nowa do generowania to `IMAGE_GEN_PROMPT` (kolizja naprawiona). 4. edytowalny prompt 'image'.
+
+### v2.28 — Backup + licznik znaków (Ustawienia; renderMain/syncSheets/loadAll NIETKNIĘTE)
+- Karta **„💾 Backup i przywracanie"** w Ustawieniach:
+  - `exportBackup()` — pobiera CAŁĄ bazę (lista `BACKUP_COLLECTIONS`, 18 kolekcji wraz z
+    `rejectedIndex` i `manualDrafts`) jako jeden plik JSON na komputer.
+  - `importBackupFile(input)` — przywraca z JSON (`writeBatch`, batch po 400), z mocnym
+    `confirm` (nadpisuje po ID). Po imporcie: F5.
+- **Licznik zaznaczonych znaków** w polach `para-*`: globalny `selectionchange` →
+  pływający badge „Zaznaczono: N znaków" (bez dotykania renderMain).
+- VPS: **`backup_full.py`** (auto-backup wszystkich kolekcji, `db.collections()` sam wykrywa,
+  rotacja ostatnich 10) + cron co 3 dni:
+  `0 4 */3 * * cd /root/tgbot && /usr/bin/python3 backup_full.py >> /root/tgbot/backup.log 2>&1`
+- DECYZJA: backup RĘCZNY = w przeglądarce (plik od razu na komputerze), AUTO = cron na VPS.
+  Nie używać Cloudinary do JSON (to hosting obrazków).
+
+### v2.29 — Swipe + Cofnij (renderMain NIETKNIĘTY — czysta delegacja)
+- `initSwipeReject()`: globalne `touchstart/move/end`, działa TYLKO na kartach Wpisów
+  (`id` zaczyna się od `card-`; inne karty mają prefiksy `tgsig-`/`tgwpisy-`/`todo-`), pomija
+  dotknięcia na textarea/button/select/input/a, swipe w lewo > 90px → `rejectWithUndo(id)`.
+- `rejectWithUndo` → `setPostStatus(id,'Odrzucone')` (reużycie, zapis do indeksu bez zmian) +
+  toast „↩ Cofnij" (6 s) → `undoReject(id, prev)` przywraca poprzedni status.
+
+### v2.30–v2.31 — Paginacja + zwiń/rozwiń akcje (renderMain: tylko render, logika filtrów/
+###               sortowania/duplikatów NIETKNIĘTA)
+- **Paginacja:** `el.innerHTML = list.slice(0, _mainLimit).map(...)` (`MAIN_PAGE = 50`).
+  `IntersectionObserver` na `#main-sentinel` → `loadMoreMain()` (+50 i re-render) + zapasowy
+  przycisk „Pokaż więcej (N pozostałych)". Reset `_mainLimit` do 50 przy zmianie filtrów (przez
+  porównanie sygnatury filtrów `_lastFilterSig`). Licznik panelu: „Widocznych: X z Y".
+- **Zwiń/rozwiń akcje (v2.31, wersja ostateczna):** istniejący przycisk **„Rozwiń/Zwiń"**
+  (`toggleExpand`) steruje JEDNOCZEŚNIE tekstem ORAZ blokiem przycisków `card-actions`
+  (domyślnie `display:none`). **„Odrzuć" zawsze na wierzchu** (poza blokiem akcji, `ml-auto`).
+  Przyciski ✨AI/🧵Wątek/🖼Obrazek zostają zawsze widoczne przy parafrazie.
+  (v2.30 miała osobny przycisk „⚙ Pokaż akcje" — porzucone na rzecz reużycia „Rozwiń".)
+
+### v2.32 — Auto-ekstrakcja linków (#6)
+- Przycisk **„🔗 Kopiuj reflink"** w bloku akcji karty → `openRefLinkModal(postId)`: wyciąga
+  linki z `p.links` + URL z `p.text`, modal z checkboxami + polem „Nazwa projektu".
+- `saveAutoRefLinks(postId)` → zapis do `refLinks` z `{autoImported:true, note:'⚠ Podmień na
+  swój ref'}`. W zakładce Linki ref takie pozycje są **podświetlone (bursztyn) + badge
+  „⚠ Podmień ref"**. **Edycja linku czyści flagę** (`autoImported:false` w `saveRefEdit`).
+
+### v2.33–v2.34 — PWA Share Target (#5)
+- `manifest.json`: dodany `share_target` (`action:"/"`, `method:"GET"`,
+  `params:{title,text,url}`). `sw.js`: cache podbity `xpost-v2` → `xpost-v3`.
+- `handleShareTarget()` (wołany w starcie po `initSwipeReject`): czyta `location.search`,
+  wyciąga URL, `history.replaceState` (żeby F5 nie powtarzał), `switchTab('manual')` i
+  **wstawia link do pola `import-x-url`** („Importuj wpis z X"), focus + scroll.
+  (v2.33 wstawiał do ręcznego formularza `manual-link`; v2.34 poprawione na `import-x-url`,
+  bo to lepszy flow: link → „Pobierz z X" → cały wpis.)
+- UWAGA: na Androidzie po deployu trzeba PRZEINSTALOWAĆ PWA (manifest cache'owany przy
+  instalacji). X udostępnia zwykle sam LINK, nie pełną treść tweeta.
+
+### v2.35 — Import z X → Szkic + pełna treść (FRONTEND + VPS razem!)
+**Wymaga równoczesnego wgrania 3 plików.** Zmiana w przepływie „Pobierz z X":
+- `/root/vps-api/fetch_tweet.py`:
+  - **Pełna treść długich tweetów:** czyta `tweet_results.note_tweet.note_tweet_results.result.
+    text` (long „note tweets"); gdy brak → fallback do `legacy.full_text`. Linki bierze z
+    `note.entity_set.urls` (albo legacy). (Wcześniej czytał tylko skrócony `full_text`.)
+  - **`main()` NIE pisze już do `posts`** (`save_to_firebase` zostało jako martwa definicja) —
+    drukuje pełne dane: `{success, account, text, links, imgs, xLink, preview}`.
+- `/root/vps-api/main.py`: endpoint `/fetch-tweet` **zwraca pełne dane** (text/links/imgs/xLink)
+  zamiast `{account, preview}`. Reszta 9 endpointów (konta X, kanały TG, health) bez zmian.
+  Po wgraniu: `pm2 reload vps-api`.
+- `src/main.js` `importFromX()`: zapisuje wynik jako **Szkic** (`manualDrafts`, badge „🐦 Z X"),
+  NIE renderuje już Wpisów. `sendDraftToWpisy` poprawione: **przenosi `links`/`imgs`**
+  (`d.links || []`) — wcześniej je gubił. Szkic edytowany (`saveDraftEdit`) zachowuje pola
+  przez `{...d}`.
+- Flow docelowy: Udostępnij z X → pole importu → „Pobierz z X" → **Szkic** (przegląd/edycja) →
+  „✉ Wyślij do Wpisów".
+
+### v2.36 — Globalne wyszukiwanie + manualDrafts w backupie
+- Przycisk **🔍 w topbarze** → `openGlobalSearch()` (modal). `runGlobalSearch(q)` przeszukuje
+  jednocześnie: posts, notes, refLinks, airdropTasks (projekty), `_remindersCache`
+  (przypomnienia — doładowywane gdy puste). Wyszukiwanie po `JSON.stringify(obj).toLowerCase()`
+  (odporne na nazwy pól), min. 2 znaki, wyniki grupowane, klik → `switchTab` do zakładki.
+  Zaślepki odrzuconych odfiltrowane.
+- `manualDrafts` dodane do `BACKUP_COLLECTIONS`.
+
+---
+
+## NOWE FUNKCJE GLOBALNE (window-exposed, gdzie istotne)
+`exportBackup, triggerImportBackup, importBackupFile, loadMoreMain, openRefLinkModal,
+saveAutoRefLinks, openGlobalSearch, runGlobalSearch, gsGo`
+(Funkcje wewnętrzne: `loadRejectedIndex, addRejectedToIndex, rejectWithUndo, undoReject,
+showUndoToast, initSwipeReject, initSelectionCounter, handleShareTarget, setupMainSentinel,
+toggleActions [usunięte w v2.31].)
+
+## ZASADY/INWARIANTY DO PILNOWANIA (dopisz do KLUCZOWE ZASADY)
+- **`syncSheets` MUSI zostać identyczny co do bajta** — anty-duplikat opiera się na `posts[id]`.
+  Zaślepki z `rejectedIndex` utrzymują ten warunek bez zmiany syncSheets.
+- **Arkusz Google nigdy nie jest przycinany** ⇒ żadnego odrzuconego ID nie wolno „zapomnieć".
+- `loadRejectedIndex` MUSI być wołane WEWNĄTRZ `loadAll` i rzucać błąd przy niepowodzeniu
+  (przerywa start → sync nie ruszy).
+- Posty importowane mają teraz ID `mdraft_…` (Szkice) lub po wysłaniu `manual_…` — spoza Arkusza,
+  nie wchodzą w dedup.
+- Reguła pracy: `pm2 reload` (nie restart); dla `vps-api` reload jest OK od ręki.
+- Dalej obowiązuje: weryfikacja `node --check` + porównanie świętych funkcji przed oddaniem pliku.
+
+---
+
+## VPS — pliki (stan na v2.36)
+- `/root/vps-api/main.py` — FastAPI, port 3099, proces `vps-api`, endpoint `/fetch-tweet`
+  zwraca pełne dane.
+- `/root/vps-api/fetch_tweet.py` — scraping przez Playwright (TweetDetail), pełna treść z
+  `note_tweet`, zwraca JSON (nie zapisuje do Firebase).
+- `/root/tgbot/backup_full.py` — auto-backup (cron co 3 dni).
+- `/root/tgbot/backup_posts.py`, `/root/tgbot/build_rejected_index.py` — narzędzia migracji
+  indeksu (idempotentne; `build_rejected_index.py` przydatny do przebudowy indeksu w razie
+  potrzeby).
+
+*Aktualizacja sesji v2.27→v2.36. Następne w kolejce (z listy 30 propozycji): do wyboru przez
+użytkownika.*
