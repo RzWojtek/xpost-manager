@@ -1,12 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.36
-// Data:            2026-06-19
-// Zmiany:          Globalne wyszukiwanie (🔍 w topbarze): jedno pole przeszukuje
-//                  wpisy + notatki + linki ref + projekty + przypomnienia, klik wyniku
-//                  przenosi do zakładki. manualDrafts dodane do listy backupu.
-// Poprzednia:      v2.35 (import z X → szkic + pełna treść)
-// Git tag:         v2.36
+// Wersja:          v2.39
+// Data:            2026-06-20
+// Zmiany:          🚀 Aplikacje: drag&drop kafelków (zapis order, writeBatch),
+//                  podstrony (rozwijana lista na kafelku → menu), obsługa linków
+//                  do plików HTML i ikon z GitHub (zwykłe URL-e). Pole subs[] w `apps`.
+// Poprzednia:      v2.38 (launcher 🚀 Aplikacje — kafelki)
+// Git tag:         v2.39
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -115,6 +115,49 @@ Rules:
 - Avoid rendering long text inside the image (it comes out garbled).
 
 Post:`
+
+// ── #1 GENERATOR ODPOWIEDZI / QUOTE-TWEETA ───────────────────────
+const REPLY_PROMPT = `Jesteś doświadczonym twórcą treści na X (Twitter) ze świata krypto / DeFi / airdropów. Poniżej znajduje się CUDZY wpis. Napisz JEDEN mądry, wartościowy komentarz, który można opublikować jako odpowiedź (reply) lub quote-tweet pod tym wpisem.
+
+ZASADY:
+- Komentarz MUSI wyraźnie nawiązywać do treści wpisu — odnieś się do konkretu (teza, liczba, projekt, wniosek). Żadnych ogólników pasujących do wszystkiego.
+- Wnieś wartość: własną myśl, kontekst, lekką kontrę, doświadczenie albo trafne pytanie — coś, co buduje dyskusję, a nie tylko potakuje.
+- Ton naturalny, pewny siebie, bez lizusostwa i bez nachalnej autopromocji.
+- Bez "Świetny wpis!", bez spamu hashtagami, maks. 1 emoji (tylko jeśli pasuje).
+- Maksymalnie ~280 znaków, gotowe do wklejenia.
+- Pisz po polsku. Jeśli wpis jest po angielsku i odpowiedź po angielsku ma sens — dopasuj język do wpisu.
+- Zwróć WYŁĄCZNIE sam komentarz — bez cudzysłowów, bez nagłówków, bez wyjaśnień.
+
+Cudzy wpis:`
+
+// ── #2 WYJAŚNIJ PO DEGENSKU ──────────────────────────────────────
+const DEGEN_PROMPT = `Wyjaśnij poniższy wpis "po degensku" — streść jego sedno do JEDNEJ prostej, krótkiej linijki, jaką degen z krypto-X rzuciłby kumplowi. Konkret: o co chodzi i czy warto się ruszyć (airdrop / nowy protokół / co trzeba zrobić).
+
+ZASADY:
+- DOKŁADNIE jedno zdanie, maks. ~200 znaków.
+- Prosto i na luzie, ale TRAFNIE — zero lania wody.
+- Po polsku. Krypto-slang dozwolony (airdrop, mint, farmić, TGE, testnet), ale tak, by każdy ogarnął.
+- Zwróć WYŁĄCZNIE tę jedną linijkę — bez cudzysłowów, bez wstępu, bez listy.
+
+Wpis do wyjaśnienia:`
+
+// ── #3 WPIS W 3 FORMACH ──────────────────────────────────────────
+const VARIANTS_PROMPT = `Na podstawie poniższego materiału źródłowego napisz DOKŁADNIE 3 różne wersje wpisu na X (Twitter) — każda w innym stylu, ta sama treść u podstaw:
+
+1) KONKRET — rzeczowo, najważniejsze fakty i liczby, prosto i klarownie.
+2) HOOK — mocny haczyk na start, krótko, pod zasięg i engagement.
+3) STORYTELLING — osobisty, narracyjny ton, jakbyś dzielił się własnym doświadczeniem.
+
+ZASADY:
+- Każda wersja maks. ~280 znaków, gotowa do wklejenia.
+- Nie wymyślaj faktów spoza materiału źródłowego — tylko reframing tego, co jest.
+- Pisz po polsku (chyba że źródło wyraźnie wymaga innego języka).
+- NIE numeruj wpisów, NIE dodawaj nagłówków ani etykiet stylów w treści.
+- Oddziel wersje DOKŁADNIE taką linią (sam separator, nic więcej w tej linii):
+---WARIANT---
+- Zwróć tylko 3 wpisy rozdzielone separatorem, nic poza tym.
+
+Materiał źródłowy:`
 
 const PARA_PROMPT = `THE WORLD-CLASS X POST PARAPHRASER & THREAD GENERATOR
 
@@ -469,7 +512,7 @@ function parseGroqHeaders() {} // zachowane dla kompatybilności, CORS blokuje n
 
 // ── EDYTOWALNE PROMPTY AI (Firestore: config/prompts) ────────────
 // Puste pole = używany jest domyślny z kodu (fallback). Sync między urządzeniami.
-const PROMPT_DEFAULTS = { para: PARA_PROMPT, translate: TRANSLATE_PROMPT, thread: THREAD_PROMPT, image: IMAGE_GEN_PROMPT }
+const PROMPT_DEFAULTS = { para: PARA_PROMPT, translate: TRANSLATE_PROMPT, thread: THREAD_PROMPT, image: IMAGE_GEN_PROMPT, reply: REPLY_PROMPT, degen: DEGEN_PROMPT, variants: VARIANTS_PROMPT }
 let _promptCfg = {}
 function getPrompt(key) {
   const v = _promptCfg[key]
@@ -503,7 +546,7 @@ function escPromptArea(s) { return (s == null ? '' : String(s)).replace(/&/g, '&
 const BACKUP_COLLECTIONS = [
   'posts','myPosts','notes','refLinks','konta','positions','reminders',
   'airdropTasks','airdropConfig','dailyTasks','aiTools','emojis','config',
-  'fcmTokens','tgSignals','tgWpisy','rejectedIndex','manualDrafts'
+  'fcmTokens','tgSignals','tgWpisy','rejectedIndex','manualDrafts','apps'
 ]
 
 async function exportBackup() {
@@ -827,6 +870,9 @@ let konta      = {}   // kategorie kont: { katId: { id, name, icon, note, accoun
 let airdropTasks = {}
 let aiTools      = {} // narzędzia AI: { docId: { id, name, desc, category, free, url, rating, tags, addedAt } }
 let manualDrafts = {} // szkice w "Dodaj ręcznie": { docId: { id, text, account, xLink, note, addedAt } }
+let apps         = {} // launcher aplikacji (v2.38): { docId: { id, name, url, desc, color, icon, order, addedAt } }
+let appEditId    = '' // id edytowanej aplikacji w formularzu launchera
+let _appIconData = '' // bieżąca ikona w formularzu (dataURL z uploadu LUB wklejony URL)
 
 // ── MOD 4/8: VPS-API state ────────────────────────────────────────
 let vpsAccountsX  = []
@@ -1756,6 +1802,124 @@ async function translatePost(id) {
   }
 }
 
+// ── #1 GENERATOR ODPOWIEDZI / QUOTE-TWEETA (popup, nic nie zapisuje) ─
+// ── #2 WYJAŚNIJ PO DEGENSKU            (popup, nic nie zapisuje) ──────
+// ── #3 WPIS W 3 FORMACH                (popup, nic nie zapisuje) ──────
+// Wszystkie 3 tylko CZYTAJĄ posts[id].text i pokazują wynik w modalu.
+// Zero zapisu do Firebase. Reużywają paraphraseWithAI() (rotacja modeli + getPrompt).
+function _escModalHtml(s) { return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
+
+let _lastReplyOut = ''
+async function replyToPost(id) {
+  const post = posts[id]
+  const text = post?.text || document.getElementById('orig-' + id)?.innerText || ''
+  if (!text.trim()) { toast('Brak tekstu wpisu'); return }
+  _lastReplyOut = ''
+  openAppModal(`
+    <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:6px">💬 Komentarz / Quote pod wpis</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:12px">Mądry komentarz nawiązujący do cudzego wpisu — gotowy jako odpowiedź lub quote.</div>
+    <div id="reply-out" style="font-size:14px;line-height:1.6;white-space:pre-wrap;color:var(--text);background:var(--bg3);border-radius:var(--rl);padding:12px;min-height:60px">⏳ Generuję komentarz...</div>
+    <div id="reply-len" style="font-size:11px;color:var(--text3);margin-top:6px"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn" id="reply-copy" onclick="copyReplyOut()" style="display:none">📋 Kopiuj</button>
+      <button class="btn" id="reply-x" onclick="copyReplyAndOpenX()" style="display:none;background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15)">🐦 Publikuj na X</button>
+      <button class="btn" onclick="closeAppModal()">Zamknij</button>
+    </div>`, 520)
+  try {
+    const result = await paraphraseWithAI(text, 'reply')
+    const out = (result?.text || '').trim()
+    _lastReplyOut = out
+    const el = document.getElementById('reply-out'); if (el) el.textContent = out
+    const len = document.getElementById('reply-len')
+    if (len) len.textContent = `Długość: ${out.length} / 280 znaków${out.length > 280 ? ' — przekroczono' : ''} · ${result.model}`
+    const cb = document.getElementById('reply-copy'); if (cb) cb.style.display = ''
+    const xb = document.getElementById('reply-x'); if (xb) xb.style.display = ''
+  } catch (e) {
+    const el = document.getElementById('reply-out')
+    if (el) { el.textContent = 'Błąd AI: ' + (e?.message || e); el.style.color = 'var(--neon5)' }
+  }
+}
+function copyReplyOut() { if (_lastReplyOut) copyText(_lastReplyOut); else toast('Brak tekstu') }
+function copyReplyAndOpenX() { if (_lastReplyOut) copyAndOpenX(_lastReplyOut); else toast('Brak tekstu') }
+
+let _lastDegenOut = ''
+async function explainDegen(id) {
+  const post = posts[id]
+  const text = post?.text || document.getElementById('orig-' + id)?.innerText || ''
+  if (!text.trim()) { toast('Brak tekstu wpisu'); return }
+  _lastDegenOut = ''
+  openAppModal(`
+    <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:6px">💡 Po degensku</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:12px">Sedno wpisu w jednej prostej linijce.</div>
+    <div id="degen-out" style="font-size:16px;line-height:1.5;color:var(--text);background:var(--bg3);border-radius:var(--rl);padding:14px;min-height:40px;font-weight:600">⏳ Tłumaczę na ludzki...</div>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="btn" id="degen-copy" onclick="copyDegenOut()" style="display:none">📋 Kopiuj</button>
+      <button class="btn" onclick="closeAppModal()">Zamknij</button>
+    </div>`, 480)
+  try {
+    const result = await paraphraseWithAI(text, 'degen')
+    const out = (result?.text || '').trim()
+    _lastDegenOut = out
+    const el = document.getElementById('degen-out'); if (el) el.textContent = out
+    const cb = document.getElementById('degen-copy'); if (cb) cb.style.display = ''
+  } catch (e) {
+    const el = document.getElementById('degen-out')
+    if (el) { el.textContent = 'Błąd AI: ' + (e?.message || e); el.style.color = 'var(--neon5)' }
+  }
+}
+function copyDegenOut() { if (_lastDegenOut) copyText(_lastDegenOut); else toast('Brak tekstu') }
+
+let _lastVariants = []
+function parseVariants(raw) {
+  const t = (raw || '').trim()
+  let parts = t.split(/\n?\s*-{2,}\s*WARIANT\s*-{2,}\s*\n?/i).map(s => s.trim()).filter(Boolean)
+  if (parts.length >= 2) return parts.slice(0, 3)
+  parts = t.split(/\n\s*-{3,}\s*\n/).map(s => s.trim()).filter(Boolean)
+  if (parts.length >= 2) return parts.slice(0, 3)
+  parts = t.split(/\n(?=\s*[1-3][\).]\s)/).map(s => s.replace(/^\s*[1-3][\).]\s*/, '').trim()).filter(Boolean)
+  if (parts.length >= 2) return parts.slice(0, 3)
+  parts = t.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean)
+  if (parts.length >= 2) return parts.slice(0, 3)
+  return [t]
+}
+async function generateVariants(id) {
+  const post = posts[id]
+  const text = post?.text || document.getElementById('orig-' + id)?.innerText || ''
+  if (!text.trim()) { toast('Brak tekstu wpisu'); return }
+  _lastVariants = []
+  openAppModal(`
+    <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:6px">🎲 Wpis w 3 formach</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:12px">🎯 Konkret · 🪝 Hook · 📖 Storytelling — wybierz najlepszą wersję.</div>
+    <div id="variants-out" style="font-size:13px;color:var(--text2)">⏳ Generuję 3 wersje...</div>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="btn" onclick="closeAppModal()">Zamknij</button>
+    </div>`, 600)
+  try {
+    const result = await paraphraseWithAI(text, 'variants')
+    _lastVariants = parseVariants(result?.text || '')
+    const labels = ['🎯 Konkret', '🪝 Hook', '📖 Storytelling']
+    const out = document.getElementById('variants-out')
+    if (out) {
+      out.innerHTML = _lastVariants.map((v, i) => `
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--rl);padding:12px;margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="font-size:12px;font-weight:700;color:var(--neon)">${labels[i] || ('Wariant ' + (i + 1))}</span>
+            <div style="display:flex;gap:8px;align-items:center">
+              <span style="font-size:10px;color:${v.length > 280 ? 'var(--neon5)' : 'var(--text3)'}">${v.length} zn.</span>
+              <button class="btn" style="padding:3px 10px;font-size:11px" onclick="copyVariant(${i})">📋 Kopiuj</button>
+            </div>
+          </div>
+          <div style="font-size:14px;line-height:1.55;white-space:pre-wrap;color:var(--text)">${_escModalHtml(v)}</div>
+        </div>`).join('') +
+        `<div style="font-size:10px;color:var(--text3);text-align:right">${result.model}</div>`
+    }
+  } catch (e) {
+    const out = document.getElementById('variants-out')
+    if (out) { out.textContent = 'Błąd AI: ' + (e?.message || e); out.style.color = 'var(--neon5)' }
+  }
+}
+function copyVariant(i) { const v = _lastVariants[i]; if (v) copyText(v); else toast('Brak tekstu') }
+
 // ── #2 PRZYPOMNIENIE Z WPISU (→ kolekcja reminders) ──────────────
 function reminderFromPost(id) {
   const post = posts[id]
@@ -2080,10 +2244,10 @@ async function addRejectedToIndex(id) {
 
 // ── FIREBASE LOAD ─────────────────────────────────────────────────
 async function loadAll() {
-  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}; aiTools = {}; manualDrafts = {}
+  posts = {}; myPosts = {}; refLinks = {}; notes = {}; tgSignals = {}; tgWpisy = {}; konta = {}; airdropTasks = {}; aiTools = {}; manualDrafts = {}; apps = {}
   // TG dane — ładowane przy starcie z limitem tgAutoLoad (domyślnie 15)
   const tgLimit = tgAutoLoad || 15
-  const [ps, ms, rs, ns, ks, at, cfg, ait, md, dt, tgs, tgw] = await Promise.all([
+  const [ps, ms, rs, ns, ks, at, cfg, ait, md, dt, tgs, tgw, appsSnap] = await Promise.all([
     getDocs(query(collection(db,'posts'),         where('status','!=','Odrzucone'))),
     getDocs(query(collection(db,'myPosts'),       orderBy('created','desc'))),
     getDocs(collection(db,'refLinks')),
@@ -2096,6 +2260,7 @@ async function loadAll() {
     getDocs(query(collection(db,'dailyTasks'),    orderBy('order','asc'))),
     getDocs(query(collection(db,'tgSignals'), orderBy('addedAt','desc'), limit(tgLimit))),
     getDocs(query(collection(db,'tgWpisy'),   orderBy('addedAt','desc'), limit(tgLimit))),
+    getDocs(collection(db,'apps')),
   ])
   ps.forEach(d  => { posts[d.id]         = d.data() })
   ms.forEach(d  => { myPosts[d.id]       = d.data() })
@@ -2108,6 +2273,7 @@ async function loadAll() {
   at.forEach(d  => { airdropTasks[d.id]  = d.data() })
   ait.forEach(d => { aiTools[d.id]       = d.data() })
   md.forEach(d  => { manualDrafts[d.id]  = d.data() })
+  appsSnap.forEach(d => { apps[d.id]     = d.data() })
   // Wczytaj customowe statusy/typy jeśli istnieją
   if (cfg.exists()) {
     const data = cfg.data()
@@ -2174,7 +2340,7 @@ function switchTab(name) {
   const pageEl = document.getElementById(`page-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, todo:renderTodo, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools, przypomnienia:loadReminders, portfel:loadPositions}
+  const fn = {main:renderMain, moje:renderMoje, todo:renderTodo, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools, apps:renderApps, przypomnienia:loadReminders, portfel:loadPositions}
   if (fn[name]) fn[name]()
   // Wiecej — renderuj aktywną podzakładkę
   if (name === 'wiecej') {
@@ -2591,6 +2757,9 @@ function renderMain() {
           <button class="btn" style="background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.15);white-space:nowrap" onclick="copyAndOpenX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Kopiuj parafrazę i otwórz X">🐦 Publikuj na X</button>
           <button class="btn" onclick="previewAsX(document.getElementById('para-${p.id}').value||document.getElementById('orig-${p.id}').innerText)" title="Podgląd jak na X">👁 Podgląd</button>
           <button class="btn" onclick="translatePost('${p.id}')" title="Przetłumacz na polski">🌐 Tłumacz</button>
+          <button class="btn" onclick="replyToPost('${p.id}')" title="Mądry komentarz / quote nawiązujący do tego wpisu">💬 Odpowiedz</button>
+          <button class="btn" onclick="explainDegen('${p.id}')" title="Streść wpis do jednej prostej linijki (po degensku)">💡 Po degensku</button>
+          <button class="btn" onclick="generateVariants('${p.id}')" title="Wygeneruj wpis w 3 formach (konkret / hook / storytelling)">🎲 3 formy</button>
           <button class="btn" onclick="reminderFromPost('${p.id}')" title="Utwórz przypomnienie z tego wpisu">🔔 Przypomnij</button>
           <button class="btn btn-success" onclick="addToProjects('${p.id}')" title="Dodaj do zakładki Projekty">🪂 Dodaj do Projektów</button>
           <button class="btn" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#10b981;white-space:nowrap" onclick="openTodoFromPost('${p.id}')">📋 Dodaj do TODO</button>
@@ -3006,6 +3175,7 @@ function updateBadges() {
   // Badge "Więcej" = suma nowych TG sygnałów + TG wpisów
   const wiecejCount = Object.values(tgSignals).filter(p=>p.status==='Nowy').length + Object.values(tgWpisy).filter(p=>p.status==='Nowy').length
   s('tab-wiecej-badge', wiecejCount || '')
+  s('tab-apps-badge', Object.keys(apps).length || '')
 }
 
 // ── RENDER: MY POSTS ──────────────────────────────────────────────
@@ -4582,6 +4752,27 @@ function renderAtSettings() {
           <button class="btn btn-primary" style="font-size:12px" onclick="savePromptCfg('image')">💾 Zapisz</button>
           <button class="btn" style="font-size:12px" onclick="resetPromptCfg('image')">↩ Przywróć domyślny</button>
         </div>
+
+        <div class="form-label">5. Odpowiedź / Quote — przycisk 💬 Odpowiedz (komentarz pod cudzy wpis)</div>
+        <textarea class="form-input" id="prompt-reply" style="min-height:120px;font-family:monospace;font-size:11px;line-height:1.4">${escPromptArea(getPrompt('reply'))}</textarea>
+        <div style="display:flex;gap:8px;margin:6px 0 16px">
+          <button class="btn btn-primary" style="font-size:12px" onclick="savePromptCfg('reply')">💾 Zapisz</button>
+          <button class="btn" style="font-size:12px" onclick="resetPromptCfg('reply')">↩ Przywróć domyślny</button>
+        </div>
+
+        <div class="form-label">6. Po degensku — przycisk 💡 Po degensku (sedno w jednej linijce)</div>
+        <textarea class="form-input" id="prompt-degen" style="min-height:90px;font-family:monospace;font-size:11px;line-height:1.4">${escPromptArea(getPrompt('degen'))}</textarea>
+        <div style="display:flex;gap:8px;margin:6px 0 16px">
+          <button class="btn btn-primary" style="font-size:12px" onclick="savePromptCfg('degen')">💾 Zapisz</button>
+          <button class="btn" style="font-size:12px" onclick="resetPromptCfg('degen')">↩ Przywróć domyślny</button>
+        </div>
+
+        <div class="form-label">7. Wpis w 3 formach — przycisk 🎲 3 formy (konkret / hook / storytelling)</div>
+        <textarea class="form-input" id="prompt-variants" style="min-height:120px;font-family:monospace;font-size:11px;line-height:1.4">${escPromptArea(getPrompt('variants'))}</textarea>
+        <div style="display:flex;gap:8px;margin:6px 0 4px">
+          <button class="btn btn-primary" style="font-size:12px" onclick="savePromptCfg('variants')">💾 Zapisz</button>
+          <button class="btn" style="font-size:12px" onclick="resetPromptCfg('variants')">↩ Przywróć domyślny</button>
+        </div>
       </div>
 
       <!-- 💾 BACKUP -->
@@ -5370,6 +5561,299 @@ async function deleteAiTool(docId) {
   toast('Usunięto ✓')
 }
 
+// ══ 🚀 LAUNCHER APLIKACJI (v2.38) ════════════════════════════════
+// Kolekcja `apps` — izolowana, NIE dotyka posts/syncSheets/loadAll(reszty)/renderMain.
+// Kafelki tylko OTWIERAJĄ apki w nowej karcie (window.open) — różne konta Google OK.
+const _appEscH = s => (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const _appEscA = s => _appEscH(s).replace(/"/g, '&quot;')
+const _appEscJ = s => (s == null ? '' : String(s)).replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+
+const SEED_APPS = [
+  { name: 'Crypto TODO',            url: 'https://cryptotodo.vercel.app/',        desc: 'Lista zadań krypto / airdropy',                 color: '#00e5ff' },
+  { name: 'Daily Onchain trx',      url: 'https://onchaingm-bot.vercel.app/',     desc: 'OnChainGM — codzienne transakcje on-chain',     color: '#7c3aed' },
+  { name: 'NoteFold',               url: 'https://notefold-two.vercel.app/',      desc: 'Notatnik PWA',                                  color: '#f59e0b' },
+  { name: 'Hyperliquid copy wallet',url: 'https://hl-tracker-jade.vercel.app/',   desc: 'HL copy-trading / wallet hunter',               color: '#10b981' },
+  { name: 'Aplikacja kuratora',     url: 'https://kurator-app.vercel.app/',       desc: 'System Kuratora Sądowego',                      color: '#3b82f6' },
+  { name: 'TikTok Monitor',         url: 'https://tiktok-monitor-omega.vercel.app/', desc: 'Monitoring TikTok',                          color: '#ec4899' },
+]
+
+function appDomain(url) {
+  try { if (!url) return ''; let u = url; if (!/^https?:\/\//i.test(u)) u = 'https://' + u; return new URL(u).hostname.replace(/^www\./, '') } catch { return '' }
+}
+function appIconSrc(a) {
+  if (a.icon) return a.icon
+  const d = appDomain(a.url)
+  return d ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(d)}&sz=128` : ''
+}
+function openAppLink(url) {
+  if (!url) { toast('Brak adresu URL'); return }
+  let u = url; if (!/^https?:\/\//i.test(u)) u = 'https://' + u
+  window.open(u, '_blank', 'noopener')
+}
+
+function renderApps() {
+  const grid = document.getElementById('apps-grid')
+  if (!grid) return
+  const list = Object.entries(apps).map(([docId, a]) => ({ ...a, docId }))
+    .sort((x, y) => ((x.order ?? 999) - (y.order ?? 999)) || (x.addedAt || '').localeCompare(y.addedAt || ''))
+  if (!list.length) {
+    grid.innerHTML = `<div class="apps-empty">
+      <div style="font-size:42px">🚀</div>
+      <div style="font-weight:700;font-size:16px;margin:10px 0 4px;color:var(--text)">Brak aplikacji</div>
+      <div style="color:var(--text3);font-size:13px;margin-bottom:16px">Dodaj własną albo wrzuć 6 startowych jednym kliknięciem.</div>
+      <button class="btn btn-primary" onclick="seedApps(this)">✨ Dodaj 6 moich aplikacji</button>
+    </div>`
+    return
+  }
+  grid.innerHTML = list.map(a => {
+    const accent = a.color || '#7c3aed'
+    const domain = appDomain(a.url)
+    const src = appIconSrc(a)
+    const mono = ((a.name || '?').trim().charAt(0) || '?').toUpperCase()
+    const subs = Array.isArray(a.subs) ? a.subs.filter(s => s && s.url) : []
+    return `<div class="app-tile" draggable="true" data-id="${a.docId}" style="--accent:${_appEscA(accent)}"
+      ondragstart="appDragStart(event,'${a.docId}')" ondragover="appDragOver(event,'${a.docId}')" ondragend="appDragEnd(event)" ondrop="appDrop(event,'${a.docId}')"
+      onclick="openAppLink('${_appEscJ(a.url)}')" title="Otwórz ${_appEscA(a.name)}">
+      <div class="app-tile-glow"></div>
+      <div class="app-actions">
+        <span class="app-mini app-drag" title="Przeciągnij, aby przestawić">⠿</span>
+        <button class="app-mini" onclick="event.stopPropagation();openAppEdit('${a.docId}')" title="Edytuj">✏️</button>
+        <button class="app-mini" onclick="event.stopPropagation();deleteApp('${a.docId}')" title="Usuń">✕</button>
+      </div>
+      <div class="app-ico-wrap">
+        <span class="app-mono">${_appEscH(mono)}</span>
+        ${src ? `<img class="app-ico-img" src="${_appEscA(src)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
+      </div>
+      <div class="app-name">${_appEscH(a.name || '')}</div>
+      ${a.desc ? `<div class="app-desc">${_appEscH(a.desc)}</div>` : '<div class="app-desc"></div>'}
+      <div class="app-foot">
+        ${subs.length ? `<button class="app-subs-btn" onclick="event.stopPropagation();openSubpagesMenu(event,'${a.docId}')" title="Podstrony">▾ Podstrony (${subs.length})</button>` : `<span class="app-domain">${_appEscH(domain)}</span>`}
+        <span class="app-open">Otwórz ↗</span>
+      </div>
+    </div>`
+  }).join('')
+}
+
+// ── Podstrony: menu (dołączane do body, by nie ucinało się w kafelku) ──
+function openSubpagesMenu(ev, docId) {
+  document.getElementById('app-subs-menu')?.remove()
+  const a = apps[docId]; if (!a) return
+  const subs = (a.subs || []).filter(s => s && s.url)
+  if (!subs.length) return
+  const m = document.createElement('div')
+  m.id = 'app-subs-menu'
+  m.style.cssText = 'position:fixed;z-index:10000;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:6px;box-shadow:0 12px 30px -8px rgba(0,0,0,.6);min-width:180px;max-width:260px'
+  m.innerHTML = subs.map(s => `<div class="app-sub-item" onclick="openAppLink('${_appEscJ(s.url)}');document.getElementById('app-subs-menu')?.remove()" style="padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">↗ ${_appEscH(s.name || appDomain(s.url) || s.url)}</div>`).join('')
+  document.body.appendChild(m)
+  const r = ev.currentTarget.getBoundingClientRect()
+  let top = r.bottom + 6, left = r.left
+  const mr = m.getBoundingClientRect()
+  if (left + mr.width > innerWidth - 8) left = innerWidth - mr.width - 8
+  if (top + mr.height > innerHeight - 8) top = r.top - mr.height - 6
+  m.style.top = Math.max(8, top) + 'px'; m.style.left = Math.max(8, left) + 'px'
+  setTimeout(() => document.addEventListener('click', _closeSubsMenu, { once: true }), 0)
+}
+function _closeSubsMenu() { document.getElementById('app-subs-menu')?.remove() }
+
+// ── Drag & drop kafelków → zapis kolejności (order) ──────────────
+let _appDragId = ''
+function appDragStart(ev, id) { _appDragId = id; ev.dataTransfer.effectAllowed = 'move'; ev.currentTarget.style.opacity = '.4' }
+function appDragEnd(ev) { ev.currentTarget.style.opacity = ''; _appDragId = '' }
+function appDragOver(ev) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move' }
+async function appDrop(ev, targetId) {
+  ev.preventDefault()
+  if (!_appDragId || _appDragId === targetId) return
+  const list = Object.entries(apps).map(([docId, a]) => ({ ...a, docId }))
+    .sort((x, y) => ((x.order ?? 999) - (y.order ?? 999)) || (x.addedAt || '').localeCompare(y.addedAt || ''))
+  const from = list.findIndex(a => a.docId === _appDragId)
+  const to = list.findIndex(a => a.docId === targetId)
+  if (from < 0 || to < 0) return
+  const [moved] = list.splice(from, 1)
+  list.splice(to, 0, moved)
+  renderAppsReorderPreview(list)   // natychmiastowy render bez czekania na Firebase
+  try {
+    const batch = writeBatch(db)
+    list.forEach((a, i) => { if (apps[a.docId] && apps[a.docId].order !== i) { apps[a.docId].order = i; batch.set(doc(db, 'apps', a.docId), { order: i }, { merge: true }) } })
+    await batch.commit()
+  } catch (e) { toast('Błąd zapisu kolejności: ' + (e?.message || e)) }
+}
+function renderAppsReorderPreview(list) {
+  list.forEach((a, i) => { if (apps[a.docId]) apps[a.docId].order = i })
+  renderApps()
+}
+
+function renderAppIconPreview() {
+  const box = document.getElementById('app-icon-preview')
+  if (!box) return
+  if (_appIconData) {
+    box.innerHTML = `<img src="${_appEscA(_appIconData)}" alt="" style="width:100%;height:100%;object-fit:cover">`
+  } else {
+    box.innerHTML = 'auto'
+  }
+}
+function appPickColor(c) { const el = document.getElementById('app-f-color'); if (el) el.value = c }
+function appIconPick(input) {
+  const file = input.files && input.files[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) { toast('Wybierz plik obrazka'); return }
+  const reader = new FileReader()
+  reader.onload = e => {
+    const img = new Image()
+    img.onload = () => {
+      const max = 128
+      let w = img.width, h = img.height
+      if (w > h) { if (w > max) { h = Math.round(h * max / w); w = max } }
+      else { if (h > max) { w = Math.round(w * max / h); h = max } }
+      const c = document.createElement('canvas'); c.width = w; c.height = h
+      c.getContext('2d').drawImage(img, 0, 0, w, h)
+      _appIconData = c.toDataURL('image/png')
+      const urlEl = document.getElementById('app-f-icon-url'); if (urlEl) urlEl.value = ''
+      renderAppIconPreview()
+    }
+    img.onerror = () => toast('Nie udało się wczytać obrazka')
+    img.src = e.target.result
+  }
+  reader.readAsDataURL(file)
+}
+function appIconUrl(v) {
+  _appIconData = (v || '').trim()
+  const fileEl = document.getElementById('app-f-icon'); if (fileEl) fileEl.value = ''
+  renderAppIconPreview()
+}
+function appClearIcon() {
+  _appIconData = ''
+  const fileEl = document.getElementById('app-f-icon'); if (fileEl) fileEl.value = ''
+  const urlEl = document.getElementById('app-f-icon-url'); if (urlEl) urlEl.value = ''
+  renderAppIconPreview()
+}
+
+function toggleAppForm(show) {
+  const f = document.getElementById('app-form')
+  const b = document.getElementById('btn-add-app')
+  if (!f || !b) return
+  if (show === undefined) show = f.style.display === 'none'
+  f.style.display = show ? 'block' : 'none'
+  b.textContent = show ? '✕ Zamknij' : '+ Dodaj aplikację'
+  if (show && !appEditId) {
+    ;['app-f-name', 'app-f-url', 'app-f-desc', 'app-f-order', 'app-f-icon-url'].forEach(id => { const el = document.getElementById(id); if (el) el.value = '' })
+    const fileEl = document.getElementById('app-f-icon'); if (fileEl) fileEl.value = ''
+    const col = document.getElementById('app-f-color'); if (col) col.value = '#7c3aed'
+    const tit = document.getElementById('app-form-title'); if (tit) tit.textContent = 'Nowa aplikacja'
+    _appIconData = ''
+    renderAppIconPreview()
+    appRenderSubRows([])
+  }
+}
+
+// ── Podstrony w formularzu (powtarzalne wiersze nazwa+url) ───────
+function appSubRowHtml(s) {
+  s = s || { name: '', url: '' }
+  return `<div class="app-sub-row" style="display:flex;gap:6px;margin-bottom:6px">
+    <input class="form-input app-sub-name" placeholder="Nazwa" value="${_appEscA(s.name || '')}" style="flex:1;font-size:12px">
+    <input class="form-input app-sub-url" placeholder="https://..." value="${_appEscA(s.url || '')}" style="flex:2;font-size:12px">
+    <button type="button" class="btn btn-danger" style="font-size:11px;padding:3px 9px;flex-shrink:0" onclick="this.closest('.app-sub-row').remove()">✕</button>
+  </div>`
+}
+function appRenderSubRows(subs) {
+  const box = document.getElementById('app-subs-rows'); if (!box) return
+  box.innerHTML = (subs || []).map(appSubRowHtml).join('')
+}
+function appAddSubRow() {
+  const box = document.getElementById('app-subs-rows'); if (!box) return
+  box.insertAdjacentHTML('beforeend', appSubRowHtml())
+}
+function appCollectSubs() {
+  return Array.from(document.querySelectorAll('#app-subs-rows .app-sub-row')).map(r => ({
+    name: r.querySelector('.app-sub-name')?.value.trim() || '',
+    url: r.querySelector('.app-sub-url')?.value.trim() || '',
+  })).filter(s => s.url)
+
+function openAppEdit(docId) {
+  const a = apps[docId]
+  if (!a) return
+  appEditId = docId
+  toggleAppForm(true)
+  document.getElementById('app-f-name').value = a.name || ''
+  document.getElementById('app-f-url').value = a.url || ''
+  document.getElementById('app-f-desc').value = a.desc || ''
+  document.getElementById('app-f-order').value = (a.order ?? '')
+  document.getElementById('app-f-color').value = a.color || '#7c3aed'
+  _appIconData = a.icon || ''
+  // jeśli ikona to URL (a nie wgrany dataURL) — pokaż go w polu URL
+  const urlEl = document.getElementById('app-f-icon-url')
+  if (urlEl) urlEl.value = (a.icon && !/^data:/.test(a.icon)) ? a.icon : ''
+  const fileEl = document.getElementById('app-f-icon'); if (fileEl) fileEl.value = ''
+  renderAppIconPreview()
+  const tit = document.getElementById('app-form-title'); if (tit) tit.textContent = 'Edytuj aplikację'
+  appRenderSubRows(Array.isArray(a.subs) ? a.subs : [])
+  document.getElementById('app-form').scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+async function saveApp() {
+  const name = document.getElementById('app-f-name')?.value.trim()
+  const url = document.getElementById('app-f-url')?.value.trim()
+  if (!name) { toast('Podaj nazwę aplikacji'); return }
+  if (!url) { toast('Podaj adres URL'); return }
+  const editing = !!appEditId
+  const docId = appEditId || ('app_' + uid())
+  const existing = editing ? apps[appEditId] : null
+  let order = parseInt(document.getElementById('app-f-order')?.value)
+  if (isNaN(order)) order = existing?.order ?? Object.keys(apps).length
+  const entry = {
+    id: docId,
+    name,
+    url,
+    desc: document.getElementById('app-f-desc')?.value.trim() || '',
+    color: document.getElementById('app-f-color')?.value || '#7c3aed',
+    icon: _appIconData || '',
+    order,
+    subs: appCollectSubs(),
+    addedAt: existing?.addedAt || nowStr(),
+  }
+  try {
+    await setDoc(doc(db, 'apps', docId), entry)
+    apps[docId] = entry
+    appEditId = ''
+    toggleAppForm(false)
+    renderApps()
+    updateBadges()
+    toast(editing ? 'Zaktualizowano ✓' : 'Dodano aplikację ✓')
+  } catch (e) { toast('Błąd zapisu: ' + (e?.message || e)) }
+}
+
+async function deleteApp(docId) {
+  const a = apps[docId]
+  if (!confirm(`Usunąć "${a?.name || 'tę aplikację'}" z launchera?`)) return
+  try {
+    await deleteDoc(doc(db, 'apps', docId))
+    delete apps[docId]
+    renderApps()
+    updateBadges()
+    toast('Usunięto ✓')
+  } catch (e) { toast('Błąd: ' + (e?.message || e)) }
+}
+
+async function seedApps(btn) {
+  if (Object.keys(apps).length) { toast('Masz już dodane aplikacje'); return }
+  if (btn) { btn.disabled = true; btn.textContent = 'Dodaję...' }
+  try {
+    let i = 0
+    for (const s of SEED_APPS) {
+      const docId = 'app_' + uid()
+      const entry = { id: docId, name: s.name, url: s.url, desc: s.desc || '', color: s.color || '#7c3aed', icon: '', order: i++, addedAt: nowStr() }
+      await setDoc(doc(db, 'apps', docId), entry)
+      apps[docId] = entry
+    }
+    renderApps()
+    updateBadges()
+    toast('Dodano 6 aplikacji ✓')
+  } catch (e) {
+    toast('Błąd: ' + (e?.message || e))
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Dodaj 6 moich aplikacji' }
+  }
+}
+// ══ KONIEC: LAUNCHER APLIKACJI ═══════════════════════════════════
+
 // ── ZDJĘCIE → TEKST (Gemini Vision + Groq fallback) ──────────────
 const IMAGE_PROMPT = `Przepisz DOKŁADNIE cały tekst widoczny na tym zdjęciu/screenshocie.
 Zachowaj:
@@ -5649,6 +6133,7 @@ function buildApp() {
       <button class="tab"        data-tab="airdrop" onclick="switchTab('airdrop')">🪂 Projekty <span class="tab-badge" id="tab-airdrop-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
       <button class="tab"        data-tab="stats"   onclick="switchTab('stats')">📊 Statystyki</button>
       <button class="tab"        data-tab="aitools" onclick="switchTab('aitools')">🤖 AI</button>
+      <button class="tab"        data-tab="apps"    onclick="switchTab('apps')">🚀 Aplikacje <span class="tab-badge" id="tab-apps-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
       <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">Więcej ▾ <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
     </div>
 
@@ -6096,6 +6581,107 @@ function buildApp() {
 
       <!-- Karty narzędzi -->
       <div id="ait-cards"><div class="loading">Ładowanie...</div></div>
+    </div>
+
+    <!-- 🚀 APLIKACJE (launcher — v2.38) -->
+    <div id="page-apps" class="page">
+      <style id="apps-style">
+        #apps-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+        .app-tile{position:relative;background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:18px 16px 14px;cursor:pointer;overflow:hidden;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;display:flex;flex-direction:column;min-height:152px}
+        .app-tile::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 16%,transparent),transparent 62%);opacity:0;transition:opacity .18s ease;pointer-events:none}
+        .app-tile:hover{transform:translateY(-4px);border-color:var(--accent);box-shadow:0 12px 30px -10px color-mix(in srgb,var(--accent) 50%,transparent)}
+        .app-tile:hover::before{opacity:1}
+        .app-tile-glow{position:absolute;top:-44px;right:-44px;width:120px;height:120px;border-radius:50%;background:var(--accent);filter:blur(46px);opacity:.16;pointer-events:none}
+        .app-ico-wrap{position:relative;width:52px;height:52px;border-radius:14px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 42%,#000));box-shadow:0 6px 16px -6px color-mix(in srgb,var(--accent) 75%,transparent);margin-bottom:12px;flex-shrink:0}
+        .app-mono{position:absolute;font-size:24px;font-weight:800;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.35)}
+        .app-ico-img{position:relative;width:100%;height:100%;object-fit:cover}
+        .app-name{font-size:15px;font-weight:700;color:var(--text);line-height:1.2;margin-bottom:4px}
+        .app-desc{font-size:12px;color:var(--text3);line-height:1.45;flex:1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+        .app-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
+        .app-domain{font-size:10px;color:var(--text3);opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:58%}
+        .app-open{font-size:11px;font-weight:800;color:var(--accent);white-space:nowrap;letter-spacing:.2px}
+        .app-actions{position:absolute;top:8px;right:8px;display:flex;gap:4px;opacity:0;transition:opacity .15s ease;z-index:3}
+        .app-tile:hover .app-actions{opacity:1}
+        .app-mini{background:rgba(0,0,0,.4);border:1px solid var(--border);color:var(--text2);border-radius:8px;width:26px;height:26px;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;line-height:1}
+        .app-mini:hover{background:rgba(0,0,0,.65);color:#fff}
+        .apps-empty{text-align:center;padding:48px 20px;color:var(--text2)}
+        .app-subs-btn{background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--text2);border-radius:8px;font-size:10.5px;font-weight:700;padding:3px 8px;cursor:pointer;white-space:nowrap}
+        .app-subs-btn:hover{background:rgba(255,255,255,.12);color:var(--text)}
+        .app-drag{cursor:grab;font-size:13px}
+        .app-tile[draggable=true]{cursor:grab}
+        @media(max-width:520px){#apps-grid{grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px}.app-actions{opacity:1}}
+      </style>
+
+      <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" id="btn-add-app" onclick="toggleAppForm()" style="white-space:nowrap">+ Dodaj aplikację</button>
+        <div style="font-size:12px;color:var(--text3)">Szybki dostęp do Twoich aplikacji — klik kafelka otwiera w nowej karcie.</div>
+      </div>
+
+      <!-- Formularz -->
+      <div id="app-form" style="display:none;margin-bottom:16px">
+        <div class="form-card">
+          <div class="form-title" id="app-form-title">Nowa aplikacja</div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Nazwa *</div>
+              <input class="form-input" id="app-f-name" placeholder="np. HL Wallet Hunter">
+            </div>
+            <div>
+              <div class="form-label">Adres URL *</div>
+              <input class="form-input" id="app-f-url" placeholder="https://...">
+            </div>
+          </div>
+          <div class="form-row full">
+            <div>
+              <div class="form-label">Opis (krótki)</div>
+              <input class="form-input" id="app-f-desc" placeholder="np. Kalendarz spraw / copy-trading...">
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <div class="form-label">Kolor akcentu</div>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <input type="color" id="app-f-color" value="#7c3aed" style="width:46px;height:34px;border:1px solid var(--border);border-radius:8px;background:var(--bg3);cursor:pointer;padding:2px">
+                <div style="display:flex;gap:7px;flex-wrap:wrap">
+                  ${['#7c3aed','#00e5ff','#10b981','#f59e0b','#ef4444','#ec4899','#3b82f6'].map(c=>`<button type="button" onclick="appPickColor('${c}')" style="width:22px;height:22px;border-radius:50%;border:2px solid var(--bg2);background:${c};cursor:pointer;box-shadow:0 0 0 1px var(--border)" title="${c}"></button>`).join('')}
+                </div>
+              </div>
+            </div>
+            <div>
+              <div class="form-label">Kolejność (mniejsza = wyżej)</div>
+              <input class="form-input" id="app-f-order" type="number" placeholder="0">
+            </div>
+          </div>
+          <div class="form-row full">
+            <div>
+              <div class="form-label">Ikona (PNG/JPG) — opcjonalnie. Domyślnie favicon strony.</div>
+              <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                <div id="app-icon-preview" style="width:54px;height:54px;border-radius:14px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--bg3);border:1px solid var(--border);flex-shrink:0;font-size:11px;color:var(--text3)">auto</div>
+                <div style="display:flex;flex-direction:column;gap:7px;min-width:200px;flex:1">
+                  <input type="file" id="app-f-icon" accept="image/png,image/jpeg,image/webp" onchange="appIconPick(this)" style="font-size:12px;color:var(--text2)">
+                  <input class="form-input" id="app-f-icon-url" placeholder="...lub wklej URL ikony" oninput="appIconUrl(this.value)" style="font-size:12px">
+                  <button type="button" class="btn" style="font-size:11px;padding:3px 10px;align-self:flex-start" onclick="appClearIcon()">Wyczyść ikonę (użyj favicon)</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="form-row full">
+            <div>
+              <div class="form-label">Podstrony (opcjonalnie) — rozwijana lista na kafelku</div>
+              <div style="font-size:11px;color:var(--text3);margin-bottom:6px">Nazwa + pełny adres (np. podstrona apki, plik HTML z GitHub Pages).</div>
+              <div id="app-subs-rows"></div>
+              <button type="button" class="btn" style="font-size:12px;padding:4px 10px" onclick="appAddSubRow()">+ Dodaj podstronę</button>
+            </div>
+          </div>
+          <div class="form-btns">
+            <button class="btn btn-primary" onclick="saveApp()">Zapisz</button>
+            <button class="btn" onclick="toggleAppForm(false)">Anuluj</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Kafelki -->
+      <div id="apps-grid"><div class="loading">Ładowanie...</div></div>
     </div>
 
     <!-- WIĘCEJ (mega-zakładka z podzakładkami) -->
@@ -6651,6 +7237,12 @@ Object.assign(window, {
   openRefLinkModal, saveAutoRefLinks,
   openGlobalSearch, runGlobalSearch, gsGo,
   generateImageForPost, regenImage, downloadImage,
+  replyToPost, copyReplyOut, copyReplyAndOpenX,
+  explainDegen, copyDegenOut,
+  generateVariants, copyVariant,
+  renderApps, toggleAppForm, saveApp, openAppEdit, deleteApp, seedApps, openAppLink,
+  appIconPick, appIconUrl, appClearIcon, appPickColor,
+  openSubpagesMenu, appAddSubRow, appDragStart, appDragOver, appDragEnd, appDrop,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
