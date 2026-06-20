@@ -5767,6 +5767,7 @@ function appCollectSubs() {
     name: r.querySelector('.app-sub-name')?.value.trim() || '',
     url: r.querySelector('.app-sub-url')?.value.trim() || '',
   })).filter(s => s.url)
+}
 
 function openAppEdit(docId) {
   const a = apps[docId]
