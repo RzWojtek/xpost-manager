@@ -1,13 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.43
+// Wersja:          v2.45
 // Data:            2026-06-20
-// Zmiany:          Menu wariant H (responsywne): na komputerze .tabs jako rozwinięty
-//                  boczny rail (ikona+nazwa); na telefonie dolny pasek-pigułka ze
-//                  stałymi: Wpisy/Aplikacje/Daily TODO/Konta + „Więcej" (arkusz z resztą).
-//                  FAB emoji uniesiony nad pasek; pigułka wyśrodkowana (rogi wolne).
-// Poprzednia:      v2.42 (zwijane statystyki, widoczny kafelek „Nowe")
-// Git tag:         v2.43
+// Zmiany:          Kolejność zakładek WYŁĄCZNIE przez Firebase (config/tabOrder) —
+//                  bez localStorage (działa na wielu urządzeniach). Odczyt awaitowany
+//                  przy starcie, zapis pokazuje realny błąd chmury gdyby odmówiła.
+// Poprzednia:      v2.44 (ikony zakładek + rozwijane „Więcej")
+// Git tag:         v2.45
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -2368,7 +2367,9 @@ function openMoreSheet() {
       const id = t.dataset.tab
       const label = (t.childNodes[0]?.textContent || id).trim()
       return `<button onclick="botGo('${id}')" style="display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px 12px;font-size:13px;cursor:pointer;text-align:left">${_appEscH(label)}</button>`
-    }).join('')
+    }).join('') +
+    `<div style="grid-column:1/-1;font-size:11px;color:var(--text3);margin:6px 2px 2px">📂 Więcej →</div>` +
+    getSubtabs().map(s => `<button onclick="railSub('${s.id}')" style="display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);color:var(--text2);border-radius:10px;padding:11px 12px;font-size:13px;cursor:pointer;text-align:left">› ${_appEscH(s.label)}</button>`).join('')
   }
   document.getElementById('more-sheet-bg').style.display = 'block'
   document.getElementById('more-sheet').style.display = 'block'
@@ -5934,12 +5935,13 @@ function applyTabOrder(order) {
   const byId = {}; tabs.forEach(t => { byId[t.dataset.tab] = t })
   order.forEach(id => { if (byId[id]) { bar.appendChild(byId[id]); delete byId[id] } })
   tabs.forEach(t => { if (byId[t.dataset.tab]) bar.appendChild(t) }) // nieujęte → na koniec w starej kolejności
+  const _m = document.getElementById('rail-more-sub'); const _w = bar.querySelector('.tab[data-tab="wiecej"]'); if (_m && _w) _w.after(_m)
 }
 async function loadTabOrder() {
   try {
     const d = await getDoc(doc(db, 'config', 'tabOrder'))
-    if (d.exists() && Array.isArray(d.data().order)) applyTabOrder(d.data().order)
-  } catch (_) {}
+    if (d.exists() && Array.isArray(d.data().order) && d.data().order.length) applyTabOrder(d.data().order)
+  } catch (e) { console.warn('[tabOrder] load:', e?.message) }
 }
 function renderTabOrderPanel() {
   const box = document.getElementById('taborder-list')
@@ -5981,14 +5983,45 @@ function toDrop(e, targetId) {
 }
 async function saveTabOrder() {
   const order = Array.from(document.querySelectorAll('.tabs .tab')).map(t => t.dataset.tab)
-  try { await setDoc(doc(db, 'config', 'tabOrder'), { order }, { merge: true }); toast('Kolejność zakładek zapisana ✓') }
-  catch (e) { toast('Błąd zapisu: ' + (e?.message || e)) }
+  applyTabOrder(order)
+  try {
+    await setDoc(doc(db, 'config', 'tabOrder'), { order }, { merge: true })
+    toast('Kolejność zapisana ✓ (synchronizacja między urządzeniami)')
+  } catch (e) {
+    toast('Błąd zapisu do chmury: ' + (e?.code || e?.message || e))
+  }
 }
 function resetTabOrder() {
   applyTabOrder(DEFAULT_TAB_ORDER)
   renderTabOrderPanel()
   setDoc(doc(db, 'config', 'tabOrder'), { order: DEFAULT_TAB_ORDER }, { merge: true }).catch(() => {})
   toast('Przywrócono domyślną kolejność')
+}
+
+// ── Rozwijane „Więcej" (podzakładki) w railu i w arkuszu mobilnym ──
+function getSubtabs() {
+  return Array.from(document.querySelectorAll('.subtab')).map(s => ({
+    id: s.dataset.subtab,
+    label: (s.childNodes[0]?.textContent || s.dataset.subtab).trim(),
+  }))
+}
+function railSub(id) {
+  closeMoreSheet()
+  switchTab('wiecej')
+  setTimeout(() => { try { switchSubTab(id) } catch (_) {} }, 0)
+}
+function renderRailMore() {
+  const box = document.getElementById('rail-more-sub'); if (!box) return
+  box.innerHTML = getSubtabs().map(s =>
+    `<button class="tab-sub" onclick="railSub('${s.id}')" style="background:none;border:none;color:var(--text2);text-align:left;font-size:12px;padding:5px 8px;border-radius:7px;cursor:pointer">› ${_appEscH(s.label)}</button>`
+  ).join('')
+}
+function toggleRailMore() {
+  const box = document.getElementById('rail-more-sub'); if (!box) return
+  const show = box.style.display === 'none' || !box.style.display
+  if (show && !box.innerHTML) renderRailMore()
+  box.style.display = show ? 'flex' : 'none'
+  const a = document.getElementById('rail-more-arrow'); if (a) a.textContent = show ? '▴' : '▾'
 }
 // ══ KONIEC: KOLEJNOŚĆ ZAKŁADEK ═══════════════════════════════════
 
@@ -6260,12 +6293,12 @@ function buildApp() {
     </div>
 
     <div class="tabs">
-      <button class="tab active" data-tab="main"    onclick="switchTab('main')">Wpisy <span class="tab-badge" id="tab-main-badge">0</span></button>
-      <button class="tab"        data-tab="moje"    onclick="switchTab('moje')">Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
+      <button class="tab active" data-tab="main"    onclick="switchTab('main')">📝 Wpisy <span class="tab-badge" id="tab-main-badge">0</span></button>
+      <button class="tab"        data-tab="moje"    onclick="switchTab('moje')">📄 Moje wpisy <span class="tab-badge" id="tab-moje-badge">0</span></button>
       <button class="tab"        data-tab="todo"    onclick="switchTab('todo')">📋 Daily TODO <span class="tab-badge" id="tab-todo-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
-      <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')">Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
+      <button class="tab"        data-tab="notatki" onclick="switchTab('notatki')">📒 Notatki <span class="tab-badge" id="tab-notes-badge">0</span></button>
       <button class="tab"        data-tab="przypomnienia" onclick="switchTab('przypomnienia')">🔔 Przypomnienia <span class="tab-badge" id="tab-przyp-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
-      <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
+      <button class="tab"        data-tab="ref"     onclick="switchTab('ref')">🔗 Linki ref <span class="tab-badge" id="tab-ref-badge">0</span></button>
       <button class="tab"        data-tab="portfel" onclick="switchTab('portfel')">👛 Portfel <span class="tab-badge" id="tab-portfel-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
       <button class="tab"        data-tab="konta"   onclick="switchTab('konta')">👤 Konta <span class="tab-badge" id="tab-konta-badge" style="background:rgba(16,185,129,.2);color:#10b981">0</span></button>
       <button class="tab"        data-tab="manual"  onclick="switchTab('manual')">✍ Dodaj ręcznie</button>
@@ -6273,7 +6306,8 @@ function buildApp() {
       <button class="tab"        data-tab="stats"   onclick="switchTab('stats')">📊 Statystyki</button>
       <button class="tab"        data-tab="aitools" onclick="switchTab('aitools')">🤖 AI</button>
       <button class="tab"        data-tab="apps"    onclick="switchTab('apps')">🚀 Aplikacje <span class="tab-badge" id="tab-apps-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
-      <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">Więcej ▾ <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
+      <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">📂 Więcej <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span><span id="rail-more-arrow" onclick="event.stopPropagation();toggleRailMore()" style="cursor:pointer;padding:0 6px;font-size:13px" title="Rozwiń podzakładki">▾</span></button>
+      <div id="rail-more-sub" style="display:none;flex-direction:column;gap:2px;padding:2px 0 6px 16px"></div>
     </div>
 
     <!-- ══ WARIANT H: rail (desktop) + dolny pasek (telefon) ══ -->
@@ -7423,6 +7457,7 @@ Object.assign(window, {
   saveTabOrder, resetTabOrder, toMove, toDragStart, toDragOver, toDragEnd, toDrop,
   toggleStats,
   botGo, openMoreSheet, closeMoreSheet,
+  toggleRailMore, railSub,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
@@ -7891,7 +7926,7 @@ onAuthStateChanged(auth, async user => {
     try { loadPositions() } catch(_) {}
     // Wczytaj edytowalne prompty AI z Firestore (fallback do domyślnych, gdy brak)
     try { loadPromptCfg() } catch(_) {}
-    try { loadTabOrder() } catch(_) {}
+    try { await loadTabOrder() } catch(_) {}
     try { initSelectionCounter() } catch(_) {}
     try { initSwipeReject() } catch(_) {}
     try { handleShareTarget() } catch(_) {}
