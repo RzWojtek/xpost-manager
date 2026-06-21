@@ -1,12 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.39
+// Wersja:          v2.40
 // Data:            2026-06-20
-// Zmiany:          🚀 Aplikacje: drag&drop kafelków (zapis order, writeBatch),
-//                  podstrony (rozwijana lista na kafelku → menu), obsługa linków
-//                  do plików HTML i ikon z GitHub (zwykłe URL-e). Pole subs[] w `apps`.
-// Poprzednia:      v2.38 (launcher 🚀 Aplikacje — kafelki)
-// Git tag:         v2.39
+// Zmiany:          🧩 Przesuwanie głównych zakładek — panel w Ustawieniach (drag + ↑↓),
+//                  kolejność zapisywana w config/tabOrder i odtwarzana przy starcie
+//                  (przestawienie węzłów .tab, bez ruszania switchTab/treści).
+// Poprzednia:      v2.39 (Aplikacje: drag&drop + podstrony)
+// Git tag:         v2.40
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -2359,7 +2359,7 @@ function switchSubTab(name) {
   const fn = {archiwum:renderArchive, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, kalendarz:renderKalendarz, ustawienia:renderAtSettings, archprojekty:renderArchProjekty}
   if (fn[name]) fn[name]()
   // MOD 8: załaduj konta VPS przy wejściu w ustawienia
-  if (name === 'ustawienia') loadVpsAccounts().then(() => renderAtSettings())
+  if (name === 'ustawienia') { loadVpsAccounts().then(() => renderAtSettings()); renderTabOrderPanel() }
 }
 
 // ── REF CHIPS ─────────────────────────────────────────────────────
@@ -4720,6 +4720,17 @@ function renderAtSettings() {
         <div id="x-handle-saved" style="font-size:11px;color:var(--neon);margin-top:6px"></div>
       </div>
 
+      <!-- 🧩 KOLEJNOŚĆ ZAKŁADEK -->
+      <div class="form-card">
+        <div class="form-title">🧩 Kolejność zakładek</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Przeciągnij wiersz (⠿) lub użyj strzałek ↑↓, żeby ustawić kolejność głównych zakładek. Potem kliknij „Zapisz". Synchronizuje się między urządzeniami.</div>
+        <div id="taborder-list"></div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn-primary" style="font-size:12px" onclick="saveTabOrder()">💾 Zapisz kolejność</button>
+          <button class="btn" style="font-size:12px" onclick="resetTabOrder()">↩ Domyślna</button>
+        </div>
+      </div>
+
       <!-- 🧠 PROMPTY AI -->
       <div class="form-card">
         <div class="form-title">🧠 Prompty AI</div>
@@ -5854,6 +5865,77 @@ async function seedApps(btn) {
   }
 }
 // ══ KONIEC: LAUNCHER APLIKACJI ═══════════════════════════════════
+
+// ══ 🧩 KOLEJNOŚĆ GŁÓWNYCH ZAKŁADEK (v2.40) ═══════════════════════
+// Przy starcie przestawiamy istniejące węzły .tab w pasku wg config/tabOrder.
+// NIE rusza switchTab/treści zakładek — tylko zmienia kolejność DOM.
+const DEFAULT_TAB_ORDER = ['main','moje','todo','notatki','przypomnienia','ref','portfel','konta','manual','airdrop','stats','aitools','apps','wiecej']
+
+function applyTabOrder(order) {
+  const bar = document.querySelector('.tabs')
+  if (!bar || !Array.isArray(order)) return
+  const tabs = Array.from(bar.querySelectorAll('.tab'))
+  const byId = {}; tabs.forEach(t => { byId[t.dataset.tab] = t })
+  order.forEach(id => { if (byId[id]) { bar.appendChild(byId[id]); delete byId[id] } })
+  tabs.forEach(t => { if (byId[t.dataset.tab]) bar.appendChild(t) }) // nieujęte → na koniec w starej kolejności
+}
+async function loadTabOrder() {
+  try {
+    const d = await getDoc(doc(db, 'config', 'tabOrder'))
+    if (d.exists() && Array.isArray(d.data().order)) applyTabOrder(d.data().order)
+  } catch (_) {}
+}
+function renderTabOrderPanel() {
+  const box = document.getElementById('taborder-list')
+  if (!box) return
+  const tabs = Array.from(document.querySelectorAll('.tabs .tab'))
+  box.innerHTML = tabs.map(t => {
+    const id = t.dataset.tab
+    const label = (t.childNodes[0]?.textContent || id).trim()
+    return `<div class="to-row" draggable="true" data-id="${id}"
+      ondragstart="toDragStart(event,'${id}')" ondragover="toDragOver(event)" ondrop="toDrop(event,'${id}')" ondragend="toDragEnd(event)"
+      style="display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;cursor:grab">
+      <span style="color:var(--text3)">⠿</span>
+      <span style="flex:1;font-size:13px;color:var(--text)">${_appEscH(label)}</span>
+      <button class="btn" style="padding:2px 9px" onclick="toMove('${id}',-1)" title="W górę">↑</button>
+      <button class="btn" style="padding:2px 9px" onclick="toMove('${id}',1)" title="W dół">↓</button>
+    </div>`
+  }).join('')
+}
+function toMove(id, dir) {
+  const bar = document.querySelector('.tabs')
+  const el = bar?.querySelector(`.tab[data-tab="${id}"]`)
+  if (!el) return
+  if (dir < 0 && el.previousElementSibling) bar.insertBefore(el, el.previousElementSibling)
+  if (dir > 0 && el.nextElementSibling) bar.insertBefore(el.nextElementSibling, el)
+  renderTabOrderPanel()
+}
+let _toDragId = ''
+function toDragStart(e, id) { _toDragId = id; e.dataTransfer.effectAllowed = 'move' }
+function toDragOver(e) { e.preventDefault() }
+function toDragEnd() { _toDragId = '' }
+function toDrop(e, targetId) {
+  e.preventDefault()
+  if (!_toDragId || _toDragId === targetId) return
+  const bar = document.querySelector('.tabs')
+  const drag = bar?.querySelector(`.tab[data-tab="${_toDragId}"]`)
+  const tgt = bar?.querySelector(`.tab[data-tab="${targetId}"]`)
+  if (drag && tgt) bar.insertBefore(drag, tgt)
+  renderTabOrderPanel()
+}
+async function saveTabOrder() {
+  const order = Array.from(document.querySelectorAll('.tabs .tab')).map(t => t.dataset.tab)
+  try { await setDoc(doc(db, 'config', 'tabOrder'), { order }, { merge: true }); toast('Kolejność zakładek zapisana ✓') }
+  catch (e) { toast('Błąd zapisu: ' + (e?.message || e)) }
+}
+function resetTabOrder() {
+  applyTabOrder(DEFAULT_TAB_ORDER)
+  renderTabOrderPanel()
+  setDoc(doc(db, 'config', 'tabOrder'), { order: DEFAULT_TAB_ORDER }, { merge: true }).catch(() => {})
+  toast('Przywrócono domyślną kolejność')
+}
+// ══ KONIEC: KOLEJNOŚĆ ZAKŁADEK ═══════════════════════════════════
+
 
 // ── ZDJĘCIE → TEKST (Gemini Vision + Groq fallback) ──────────────
 const IMAGE_PROMPT = `Przepisz DOKŁADNIE cały tekst widoczny na tym zdjęciu/screenshocie.
@@ -7244,6 +7326,7 @@ Object.assign(window, {
   renderApps, toggleAppForm, saveApp, openAppEdit, deleteApp, seedApps, openAppLink,
   appIconPick, appIconUrl, appClearIcon, appPickColor,
   openSubpagesMenu, appAddSubRow, appDragStart, appDragOver, appDragEnd, appDrop,
+  saveTabOrder, resetTabOrder, toMove, toDragStart, toDragOver, toDragEnd, toDrop,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
@@ -7712,6 +7795,7 @@ onAuthStateChanged(auth, async user => {
     try { loadPositions() } catch(_) {}
     // Wczytaj edytowalne prompty AI z Firestore (fallback do domyślnych, gdy brak)
     try { loadPromptCfg() } catch(_) {}
+    try { loadTabOrder() } catch(_) {}
     try { initSelectionCounter() } catch(_) {}
     try { initSwipeReject() } catch(_) {}
     try { handleShareTarget() } catch(_) {}
