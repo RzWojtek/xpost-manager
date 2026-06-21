@@ -1,12 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.41
+// Wersja:          v2.42
 // Data:            2026-06-20
-// Zmiany:          Fix: panel „Kolejność zakładek" był pusty (renderTabOrderPanel
-//                  wołany przed wstrzyknięciem HTML) → teraz na końcu renderAtSettings.
-//                  Ujednolicony, czytelniejszy wygląd kafelków w Ustawieniach (scoped CSS).
-// Poprzednia:      v2.40 (przesuwanie głównych zakładek)
-// Git tag:         v2.41
+// Zmiany:          Statystyki na Wpisach: zawsze widoczny tylko kafelek „Nowe",
+//                  reszta zwijana jednym tapnięciem (📊 Statystyki ▾), stan w
+//                  localStorage (domyślnie schowane) — odzyskany ekran na telefonie.
+// Poprzednia:      v2.41 (fix panelu kolejności + wygląd Ustawień)
+// Git tag:         v2.42
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -3110,37 +3110,55 @@ function updateStats() {
 
   // Kafelek "Wszystkich" — aktywne (bez Odrzucone/Opublikowane), klik resetuje filtr
   const activeCount = all.filter(p => p.status !== 'Odrzucone' && p.status !== 'Opublikowane').length
-  let html = `
+  cont.style.display = 'block'
+  const collapsed = localStorage.getItem('statsCollapsed') !== '0' // domyślnie zwinięte
+
+  // Reszta kafelków (wszystko poza "Nowe") — chowane pod toggle
+  let rest = `
     <div class="stat" style="cursor:pointer" onclick="filterByStatus('')" title="Pokaż wszystkie aktywne">
       <div class="stat-n" style="color:var(--text)">${activeCount}</div>
       <div class="stat-l">Wszystkich</div>
     </div>`
-
-  // Kafelek per status z konfiguracji — klikalny, filtruje listę
   for (const st of POST_STATUSES) {
+    if (st === 'Nowy') continue
     const color = colorMap[st] || 'var(--text2)'
-    html += `
+    rest += `
     <div class="stat" style="cursor:pointer" onclick="filterByStatus('${st.replace(/'/g, "\\'")}')" title="Filtruj: ${st}">
       <div class="stat-n" style="color:${color}">${cnt(st)}</div>
       <div class="stat-l">${st}</div>
     </div>`
   }
-
-  // Opublikowane — licznik nieklikalny (Wpisy ich nie pokazują)
-  html += `
+  rest += `
     <div class="stat" title="Opublikowane są w zakładce Moje wpisy">
       <div class="stat-n" style="color:var(--neon3)">${cnt('Opublikowane')}</div>
       <div class="stat-l">Opublikowanych</div>
-    </div>`
-
-  // Odrzucone — licznik nieklikalny
-  html += `
+    </div>
     <div class="stat" title="Odrzucone wpisy">
       <div class="stat-n" style="color:#ef4444">${cnt('Odrzucone')}</div>
       <div class="stat-l">Odrzuconych</div>
     </div>`
 
-  cont.innerHTML = html
+  // Zawsze widoczny kafelek "Nowe" + przycisk rozwijania reszty
+  cont.innerHTML = `
+    <div style="display:flex;align-items:stretch;gap:8px">
+      <div class="stat" style="cursor:pointer;flex:1" onclick="filterByStatus('Nowy')" title="Filtruj: Nowe">
+        <div class="stat-n" style="color:var(--neon);font-size:24px">${cnt('Nowy')}</div>
+        <div class="stat-l">Nowe</div>
+      </div>
+      <button onclick="toggleStats()" style="display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--border);color:var(--text2);border-radius:14px;padding:0 14px;font-size:12px;cursor:pointer;white-space:nowrap">📊 Statystyki <span id="stats-arrow">${collapsed ? '▾' : '▲'}</span></button>
+    </div>
+    <div id="main-stats-rest" style="display:${collapsed ? 'none' : 'grid'};grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;margin-top:8px">
+      ${rest}
+    </div>`
+}
+
+function toggleStats() {
+  const r = document.getElementById('main-stats-rest')
+  if (!r) return
+  const show = r.style.display === 'none'
+  r.style.display = show ? 'grid' : 'none'
+  const a = document.getElementById('stats-arrow'); if (a) a.textContent = show ? '▲' : '▾'
+  localStorage.setItem('statsCollapsed', show ? '0' : '1')
 }
 
 // Klik w kafelek statystyk → ustawia filtr statusu i odświeża listę
@@ -7336,6 +7354,7 @@ Object.assign(window, {
   appIconPick, appIconUrl, appClearIcon, appPickColor,
   openSubpagesMenu, appAddSubRow, appDragStart, appDragOver, appDragEnd, appDrop,
   saveTabOrder, resetTabOrder, toMove, toDragStart, toDragOver, toDragEnd, toDrop,
+  toggleStats,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
