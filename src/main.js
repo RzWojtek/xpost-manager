@@ -1,12 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.40
+// Wersja:          v2.41
 // Data:            2026-06-20
-// Zmiany:          🧩 Przesuwanie głównych zakładek — panel w Ustawieniach (drag + ↑↓),
-//                  kolejność zapisywana w config/tabOrder i odtwarzana przy starcie
-//                  (przestawienie węzłów .tab, bez ruszania switchTab/treści).
-// Poprzednia:      v2.39 (Aplikacje: drag&drop + podstrony)
-// Git tag:         v2.40
+// Zmiany:          Fix: panel „Kolejność zakładek" był pusty (renderTabOrderPanel
+//                  wołany przed wstrzyknięciem HTML) → teraz na końcu renderAtSettings.
+//                  Ujednolicony, czytelniejszy wygląd kafelków w Ustawieniach (scoped CSS).
+// Poprzednia:      v2.40 (przesuwanie głównych zakładek)
+// Git tag:         v2.41
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -2359,7 +2359,7 @@ function switchSubTab(name) {
   const fn = {archiwum:renderArchive, tgsygnaly:renderTgSygnaly, tgwpisy:renderTgWpisy, kalendarz:renderKalendarz, ustawienia:renderAtSettings, archprojekty:renderArchProjekty}
   if (fn[name]) fn[name]()
   // MOD 8: załaduj konta VPS przy wejściu w ustawienia
-  if (name === 'ustawienia') { loadVpsAccounts().then(() => renderAtSettings()); renderTabOrderPanel() }
+  if (name === 'ustawienia') loadVpsAccounts().then(() => renderAtSettings())
 }
 
 // ── REF CHIPS ─────────────────────────────────────────────────────
@@ -4674,7 +4674,15 @@ function renderAtSettings() {
     : []
 
   el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:18px;align-items:start">
+    <style>
+      .set-grid .form-card{border:1px solid var(--border) !important;border-radius:14px !important;box-shadow:none !important;background:var(--bg2) !important;padding:16px 16px 18px !important}
+      .set-grid .form-title{display:flex;align-items:center;gap:7px;font-size:14px;border-bottom:1px solid var(--border);padding-bottom:9px;margin-bottom:12px}
+      .set-grid .btn{border-radius:9px}
+      .set-grid input.form-input,.set-grid textarea.form-input,.set-grid select.form-select{border-radius:9px}
+      .set-grid .to-row:hover{border-color:var(--neon)}
+      @media(max-width:640px){.set-grid{grid-template-columns:1fr !important}}
+    </style>
+    <div class="set-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;align-items:start">
 
       <!-- ═══ KOLUMNA 1 ═══ -->
 
@@ -4987,6 +4995,7 @@ function renderAtSettings() {
     </div>`
 
   refreshPushBtnState()
+  renderTabOrderPanel()
 }
 
 function addAtStatus() {
