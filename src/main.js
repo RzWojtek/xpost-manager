@@ -1,12 +1,13 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.42
+// Wersja:          v2.43
 // Data:            2026-06-20
-// Zmiany:          Statystyki na Wpisach: zawsze widoczny tylko kafelek „Nowe",
-//                  reszta zwijana jednym tapnięciem (📊 Statystyki ▾), stan w
-//                  localStorage (domyślnie schowane) — odzyskany ekran na telefonie.
-// Poprzednia:      v2.41 (fix panelu kolejności + wygląd Ustawień)
-// Git tag:         v2.42
+// Zmiany:          Menu wariant H (responsywne): na komputerze .tabs jako rozwinięty
+//                  boczny rail (ikona+nazwa); na telefonie dolny pasek-pigułka ze
+//                  stałymi: Wpisy/Aplikacje/Daily TODO/Konta + „Więcej" (arkusz z resztą).
+//                  FAB emoji uniesiony nad pasek; pigułka wyśrodkowana (rogi wolne).
+// Poprzednia:      v2.42 (zwijane statystyki, widoczny kafelek „Nowe")
+// Git tag:         v2.43
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -2347,6 +2348,34 @@ function switchTab(name) {
     const activeSubtab = document.querySelector('.subtab.active')?.dataset.subtab || 'archiwum'
     switchSubTab(activeSubtab)
   }
+  updateBotNav(name)
+}
+
+// ── Dolny pasek (telefon, wariant H) ─────────────────────────────
+const BOTNAV_FIXED = ['main', 'apps', 'todo', 'konta']
+function botGo(name) { closeMoreSheet(); switchTab(name); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+function updateBotNav(name) {
+  const bn = document.getElementById('botnav'); if (!bn) return
+  bn.querySelectorAll('button').forEach(b => b.classList.remove('on'))
+  const key = BOTNAV_FIXED.includes(name) ? name : '__more'
+  bn.querySelector(`button[data-bt="${key}"]`)?.classList.add('on')
+}
+function openMoreSheet() {
+  const list = document.getElementById('more-sheet-list')
+  if (list) {
+    const tabs = Array.from(document.querySelectorAll('.tabs .tab'))
+    list.innerHTML = tabs.map(t => {
+      const id = t.dataset.tab
+      const label = (t.childNodes[0]?.textContent || id).trim()
+      return `<button onclick="botGo('${id}')" style="display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px 12px;font-size:13px;cursor:pointer;text-align:left">${_appEscH(label)}</button>`
+    }).join('')
+  }
+  document.getElementById('more-sheet-bg').style.display = 'block'
+  document.getElementById('more-sheet').style.display = 'block'
+}
+function closeMoreSheet() {
+  const bg = document.getElementById('more-sheet-bg'); if (bg) bg.style.display = 'none'
+  const s = document.getElementById('more-sheet'); if (s) s.style.display = 'none'
 }
 
 function switchSubTab(name) {
@@ -6247,6 +6276,44 @@ function buildApp() {
       <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">Więcej ▾ <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span></button>
     </div>
 
+    <!-- ══ WARIANT H: rail (desktop) + dolny pasek (telefon) ══ -->
+    <style id="navH">
+      /* DESKTOP ≥769px: .tabs jako rozwinięty boczny rail */
+      @media (min-width:769px){
+        #main-app{padding-left:212px}
+        .tabs{position:fixed;left:0;top:0;bottom:0;width:212px;flex-direction:column;flex-wrap:nowrap;gap:3px;overflow-y:auto;overflow-x:hidden;align-items:stretch;background:var(--bg2,#1a1b22);border-right:1px solid var(--border,#2a2b33);padding:14px 10px;z-index:50;border-bottom:none}
+        .tabs::-webkit-scrollbar{width:6px}
+        .tabs::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:3px}
+        .tabs .tab{width:100%;text-align:left;justify-content:flex-start;white-space:nowrap;border-radius:10px;border-bottom:none !important}
+      }
+      #botnav{display:none}
+      /* MOBILE ≤768px: chowamy rail, pokazujemy dolną pigułkę */
+      @media (max-width:768px){
+        .tabs{display:none !important}
+        #botnav{display:flex;position:fixed;left:50%;transform:translateX(-50%);bottom:12px;z-index:9990;
+          background:rgba(20,21,27,.96);border:1px solid var(--border,#2a2b33);border-radius:18px;
+          padding:6px 8px;gap:2px;box-shadow:0 8px 26px rgba(0,0,0,.5);backdrop-filter:blur(8px);max-width:calc(100vw - 110px)}
+        #botnav button{background:none;border:none;color:#9aa0ac;font-size:9.5px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 9px;border-radius:12px;cursor:pointer;white-space:nowrap}
+        #botnav button .bi{font-size:19px;line-height:1}
+        #botnav button.on{color:#fff;background:rgba(124,58,237,.28)}
+        .emoji-fab{bottom:74px !important}
+        body{padding-bottom:70px}
+      }
+    </style>
+    <nav id="botnav">
+      <button data-bt="main"  onclick="botGo('main')"><span class="bi">📝</span>Wpisy</button>
+      <button data-bt="apps"  onclick="botGo('apps')"><span class="bi">🚀</span>Aplikacje</button>
+      <button data-bt="todo"  onclick="botGo('todo')"><span class="bi">📋</span>TODO</button>
+      <button data-bt="konta" onclick="botGo('konta')"><span class="bi">👤</span>Konta</button>
+      <button data-bt="__more" onclick="openMoreSheet()"><span class="bi">☰</span>Więcej</button>
+    </nav>
+    <div id="more-sheet-bg" onclick="closeMoreSheet()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9995"></div>
+    <div id="more-sheet" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:9996;background:var(--bg2,#1a1b22);border-top:1px solid var(--border,#2a2b33);border-radius:18px 18px 0 0;padding:14px 14px calc(14px + env(safe-area-inset-bottom));max-height:70vh;overflow-y:auto">
+      <div style="width:40px;height:4px;background:rgba(255,255,255,.2);border-radius:2px;margin:0 auto 12px"></div>
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px">Wszystkie zakładki</div>
+      <div id="more-sheet-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px"></div>
+    </div>
+
     <!-- WPISY -->
     <div id="page-main" class="page active">
       <div class="stats" id="main-stats" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))"></div>
@@ -7355,6 +7422,7 @@ Object.assign(window, {
   openSubpagesMenu, appAddSubRow, appDragStart, appDragOver, appDragEnd, appDrop,
   saveTabOrder, resetTabOrder, toMove, toDragStart, toDragOver, toDragEnd, toDrop,
   toggleStats,
+  botGo, openMoreSheet, closeMoreSheet,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
