@@ -1,12 +1,13 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.45
+// Wersja:          v2.46
 // Data:            2026-06-20
-// Zmiany:          Kolejność zakładek WYŁĄCZNIE przez Firebase (config/tabOrder) —
-//                  bez localStorage (działa na wielu urządzeniach). Odczyt awaitowany
-//                  przy starcie, zapis pokazuje realny błąd chmury gdyby odmówiła.
-// Poprzednia:      v2.44 (ikony zakładek + rozwijane „Więcej")
-// Git tag:         v2.45
+// Zmiany:          Nawyk publikacji: licznik „N gotowych do publikacji" na Wpisach
+//                  (klik→filtr), seria dni z rzędu 🔥, oraz codzienny push o wybranej
+//                  godzinie (reminders/daily-publish, tytuł z liczbą gotowców).
+//                  „Gotowy" = ma parafrazę i nie jest Opublikowany/Odrzucony.
+// Poprzednia:      v2.45 (kolejność zakładek tylko przez Firebase)
+// Git tag:         v2.46
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -2645,6 +2646,7 @@ function renderMain() {
 
   const list = Object.values(posts).filter(p => {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
+    if (_filterReady && !(p.para && p.para.trim())) return false
     if (fAccount && p.account !== fAccount) return false
     if (fStatus  && p.status  !== fStatus)  return false
     const isRT = p.isRT || (p.account && p.account.includes(' RT @'))
@@ -3077,14 +3079,15 @@ async function setPostStatus(id, status) {
   if (status === 'Opublikowane') { posts[id].archivedAt = nowStr(); upd.archivedAt = posts[id].archivedAt }
   if (status === 'Odrzucone') await addRejectedToIndex(id)   // zapisz id do indeksu PRZED zmianą statusu
   await updateDoc(doc(db,'posts',id), upd)
-  if (status === 'Opublikowane') toast('Przeniesiono do Archiwum ✓')
-  renderMain(); updateStats(); updateBadges()
+  if (status === 'Opublikowane') { toast('Przeniesiono do Archiwum ✓'); recordPublish(); if (_habit.pushEnabled) ensureDailyReminder() }
+  renderMain(); updateStats(); updateBadges(); renderHabitUI()
 }
 
 async function savePara(id, value) {
   if (!posts[id] || posts[id].para === value) return
   posts[id].para = value
   await updateDoc(doc(db,'posts',id), { para: value })
+  renderHabitUI()
 }
 
 async function savePostNote(id, value) {
@@ -3180,6 +3183,7 @@ function updateStats() {
     <div id="main-stats-rest" style="display:${collapsed ? 'none' : 'grid'};grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;margin-top:8px">
       ${rest}
     </div>`
+  try { renderHabitUI() } catch (_) {}
 }
 
 function toggleStats() {
@@ -3190,6 +3194,97 @@ function toggleStats() {
   const a = document.getElementById('stats-arrow'); if (a) a.textContent = show ? '▲' : '▾'
   localStorage.setItem('statsCollapsed', show ? '0' : '1')
 }
+
+// ══ NAWYK PUBLIKACJI (v2.46): gotowce + seria + push ═══════════════
+// "Gotowy do publikacji" = ma niepustą parafrazę i nie jest Opublikowany/Odrzucony.
+// Badge liczy je na żywo (klik → filtr), seria = dni z rzędu z publikacją,
+// push = cykliczne przypomnienie (reminders/daily-publish) o wybranej godzinie.
+let _habit = { pushEnabled: true, pushHour: 9, streakCount: 0, streakBest: 0, lastPublishDay: '' }
+let _filterReady = false
+
+function _todayStr() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+function _dayStr(off) { const d = new Date(); d.setDate(d.getDate() + off); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+function _plural(n, one, few, many) { const m10 = n % 10, m100 = n % 100; if (n === 1) return one; return (m10 >= 2 && m10 <= 4 && !(m100 >= 12 && m100 <= 14)) ? few : many }
+
+function readyToPublishIds() {
+  return Object.keys(posts).filter(id => { const p = posts[id]; return p && p.para && p.para.trim() && p.status !== 'Opublikowane' && p.status !== 'Odrzucone' })
+}
+function readyCount() { return readyToPublishIds().length }
+
+function currentStreak() {
+  if (_habit.lastPublishDay === _todayStr() || _habit.lastPublishDay === _dayStr(-1)) return _habit.streakCount || 0
+  return 0
+}
+
+async function loadHabit() {
+  try { const d = await getDoc(doc(db, 'config', 'publishHabit')); if (d.exists()) _habit = { ..._habit, ...d.data() } } catch (_) {}
+  renderHabitUI()
+  try { if (_habit.pushEnabled) await ensureDailyReminder() } catch (_) {}
+}
+async function saveHabit(patch) {
+  _habit = { ..._habit, ...patch }
+  try { await setDoc(doc(db, 'config', 'publishHabit'), patch, { merge: true }) } catch (e) { console.warn('[habit] save', e?.message) }
+}
+
+async function recordPublish() {
+  const t = _todayStr()
+  if (_habit.lastPublishDay === t) return // dziś już policzone
+  const count = (_habit.lastPublishDay === _dayStr(-1)) ? (_habit.streakCount || 0) + 1 : 1
+  const best = Math.max(_habit.streakBest || 0, count)
+  await saveHabit({ lastPublishDay: t, streakCount: count, streakBest: best })
+  renderHabitUI()
+  if (count > 1) toast(`🔥 Seria ${count} dni z rzędu! Tak trzymaj`)
+  else toast('🔥 Seria wystartowała! Do jutra')
+}
+
+function renderHabitUI() {
+  const bar = document.getElementById('habit-bar'); if (!bar) return
+  const n = readyCount(), s = currentStreak()
+  let html = ''
+  if (_filterReady) {
+    html += `<button onclick="clearReadyFilter()" style="display:inline-flex;align-items:center;gap:6px;background:var(--neon);color:#001;border:none;border-radius:10px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer">✕ Filtr: gotowe (${n})</button>`
+  } else if (n > 0) {
+    html += `<button onclick="filterReady()" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,var(--neon),#7c3aed);color:#001;border:none;border-radius:10px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px -4px var(--neon)">🚀 ${n} ${_plural(n, 'gotowy', 'gotowe', 'gotowych')} do publikacji →</button>`
+  } else {
+    html += `<span style="font-size:12px;color:var(--text3)">✅ Brak gotowców — zrób parafrazę i publikuj</span>`
+  }
+  if (s > 0) html += `<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(245,158,11,.14);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:7px 11px;font-size:12.5px;font-weight:700" title="Najlepsza seria: ${_habit.streakBest || 0} dni">🔥 ${s} ${_plural(s, 'dzień', 'dni', 'dni')} z rzędu</span>`
+  bar.innerHTML = html
+}
+
+function filterReady() {
+  _filterReady = true
+  const selSt = document.getElementById('f-status'); if (selSt) selSt.value = ''
+  switchTab('main')
+  renderMain(); renderHabitUI()
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+function clearReadyFilter() { _filterReady = false; renderMain(); renderHabitUI() }
+
+async function ensureDailyReminder() {
+  const n = readyCount()
+  const hour = Number.isInteger(_habit.pushHour) ? _habit.pushHour : 9
+  const d = new Date(); d.setHours(hour, 0, 0, 0)
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1) // najbliższe wystąpienie
+  const title = n > 0
+    ? `📝 Masz ${n} ${_plural(n, 'gotowy wpis', 'gotowe wpisy', 'gotowych wpisów')} — wrzuć jeden na X 🚀`
+    : `📝 Zrób parafrazę i wrzuć wpis na X 🚀`
+  const r = { id: 'daily-publish', type: 'custom', title, body: '', url: '/', remindAt: d.getTime(), recurring: 'daily', sent: false, createdAt: nowStr() }
+  try { await setDoc(doc(db, 'reminders', 'daily-publish'), r); if (typeof _remindersCache === 'object' && _remindersCache) _remindersCache['daily-publish'] = r } catch (e) { console.warn('[habit] reminder', e?.message) }
+}
+async function removeDailyReminder() {
+  try { await deleteDoc(doc(db, 'reminders', 'daily-publish')); if (typeof _remindersCache === 'object' && _remindersCache) delete _remindersCache['daily-publish'] } catch (_) {}
+}
+async function saveHabitFromSettings() {
+  const enabled = document.getElementById('habit-push-enabled')?.checked
+  const hourEl = document.getElementById('habit-push-hour')
+  const hour = hourEl ? parseInt(hourEl.value) : 9
+  await saveHabit({ pushEnabled: !!enabled, pushHour: isNaN(hour) ? 9 : hour })
+  if (_habit.pushEnabled) await ensureDailyReminder(); else await removeDailyReminder()
+  renderHabitUI()
+  toast('Ustawienia nawyku zapisane ✓')
+}
+// ══ KONIEC: NAWYK PUBLIKACJI ═══════════════════════════════════════
 
 // Klik w kafelek statystyk → ustawia filtr statusu i odświeża listę
 function filterByStatus(status) {
@@ -4776,6 +4871,24 @@ function renderAtSettings() {
         <div id="x-handle-saved" style="font-size:11px;color:var(--neon);margin-top:6px"></div>
       </div>
 
+      <!-- 🔥 NAWYK PUBLIKACJI -->
+      <div class="form-card">
+        <div class="form-title">🔥 Nawyk publikacji</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Codzienny push przypomni o gotowych wpisach (parafraza zrobiona, jeszcze nieopublikowane). „Gotowe" widać też na liczniku w zakładce Wpisy.</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);margin-bottom:12px;cursor:pointer">
+          <input type="checkbox" id="habit-push-enabled" ${_habit.pushEnabled ? 'checked' : ''} style="width:16px;height:16px">
+          Codzienne powiadomienie push
+        </label>
+        <div class="form-label">Godzina powiadomienia</div>
+        <select class="form-input" id="habit-push-hour" style="max-width:140px">
+          ${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${(_habit.pushHour ?? 9) === h ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}
+        </select>
+        <div style="font-size:12px;color:var(--text2);margin:12px 0 4px">🔥 Aktualna seria: <b style="color:#f59e0b">${currentStreak()}</b> dni · rekord: <b>${_habit.streakBest || 0}</b> dni</div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn-primary" style="font-size:12px" onclick="saveHabitFromSettings()">💾 Zapisz</button>
+        </div>
+      </div>
+
       <!-- 🧩 KOLEJNOŚĆ ZAKŁADEK -->
       <div class="form-card">
         <div class="form-title">🧩 Kolejność zakładek</div>
@@ -6350,6 +6463,7 @@ function buildApp() {
 
     <!-- WPISY -->
     <div id="page-main" class="page active">
+      <div id="habit-bar" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px"></div>
       <div class="stats" id="main-stats" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))"></div>
       <div class="filters">
         <select id="f-account" onchange="renderMain()"><option value="">Wszystkie konta</option></select>
@@ -7458,6 +7572,7 @@ Object.assign(window, {
   toggleStats,
   botGo, openMoreSheet, closeMoreSheet,
   toggleRailMore, railSub,
+  filterReady, clearReadyFilter, saveHabitFromSettings,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
@@ -7927,6 +8042,7 @@ onAuthStateChanged(auth, async user => {
     // Wczytaj edytowalne prompty AI z Firestore (fallback do domyślnych, gdy brak)
     try { loadPromptCfg() } catch(_) {}
     try { await loadTabOrder() } catch(_) {}
+    try { await loadHabit() } catch(_) {}
     try { initSelectionCounter() } catch(_) {}
     try { initSwipeReject() } catch(_) {}
     try { handleShareTarget() } catch(_) {}
