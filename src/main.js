@@ -1,13 +1,13 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.46
+// Wersja:          v2.47
 // Data:            2026-06-20
-// Zmiany:          Nawyk publikacji: licznik „N gotowych do publikacji" na Wpisach
-//                  (klik→filtr), seria dni z rzędu 🔥, oraz codzienny push o wybranej
-//                  godzinie (reminders/daily-publish, tytuł z liczbą gotowców).
-//                  „Gotowy" = ma parafrazę i nie jest Opublikowany/Odrzucony.
-// Poprzednia:      v2.45 (kolejność zakładek tylko przez Firebase)
-// Git tag:         v2.46
+// Zmiany:          🔐 Sejf — zaszyfrowane hasła. AES-GCM 256 + PBKDF2 w przeglądarce,
+//                  do Firebase (vault/data) leci TYLKO szyfrogram. Hasło główne/klucz
+//                  tylko w pamięci. Weryfikator hasła, auto-lock 5 min + przy ukryciu
+//                  karty, kopiuj bez pokazywania. Jeden blok na całą listę.
+// Poprzednia:      v2.46 (nawyk publikacji: gotowce + seria + push)
+// Git tag:         v2.47
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -2341,7 +2341,7 @@ function switchTab(name) {
   const pageEl = document.getElementById(`page-${name}`)
   if (tabEl)  tabEl.classList.add('active')
   if (pageEl) pageEl.classList.add('active')
-  const fn = {main:renderMain, moje:renderMoje, todo:renderTodo, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools, apps:renderApps, przypomnienia:loadReminders, portfel:loadPositions}
+  const fn = {main:renderMain, moje:renderMoje, todo:renderTodo, notatki:renderNotes, ref:renderRef, konta:renderKonta, manual:()=>{}, airdrop:renderAirdrop, stats:renderStats, aitools:renderAiTools, apps:renderApps, vault:renderVault, przypomnienia:loadReminders, portfel:loadPositions}
   if (fn[name]) fn[name]()
   // Wiecej — renderuj aktywną podzakładkę
   if (name === 'wiecej') {
@@ -3285,6 +3285,195 @@ async function saveHabitFromSettings() {
   toast('Ustawienia nawyku zapisane ✓')
 }
 // ══ KONIEC: NAWYK PUBLIKACJI ═══════════════════════════════════════
+
+// ══ 🔐 SEJF — zaszyfrowane hasła (v2.47) ═══════════════════════════
+// Szyfrowanie WYŁĄCZNIE w przeglądarce (Web Crypto): AES-GCM 256 + PBKDF2.
+// Do Firebase (vault/data) leci TYLKO szyfrogram. Hasło główne i klucz żyją
+// tylko w pamięci karty — nic do Firebase, nic do localStorage.
+// "Jeden blok na całą listę" + weryfikator hasła + auto-lock 5 min.
+const VAULT_VERIFIER = 'VAULT_OK_v1'
+const VAULT_PBKDF2_ITER = 250000
+const VAULT_AUTOLOCK_MS = 5 * 60 * 1000
+let _vaultKey = null       // CryptoKey (null = zablokowany)
+let _vaultItems = null     // odszyfrowana lista [{id,name,login,password,note,url}]
+let _vaultDoc = null       // surowy dokument z Firebase (salt, ver, data)
+let _vaultReveal = new Set()
+let _vaultLockTimer = null
+
+function _b64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))) }
+function _unb64(s) { return Uint8Array.from(atob(s), c => c.charCodeAt(0)) }
+async function _vDeriveKey(password, salt) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey'])
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: VAULT_PBKDF2_ITER, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+}
+async function _vEnc(key, text) {
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text))
+  return { iv: _b64(iv), ct: _b64(ct) }
+}
+async function _vDec(key, ivB64, ctB64) {
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: _unb64(ivB64) }, key, _unb64(ctB64))
+  return new TextDecoder().decode(pt)
+}
+function _vEsc(s) { return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') }
+
+function _vaultArmAutoLock() {
+  if (_vaultLockTimer) clearTimeout(_vaultLockTimer)
+  _vaultLockTimer = setTimeout(() => { if (_vaultKey) { vaultLock(); toast('🔒 Sejf zablokowany (bezczynność)') } }, VAULT_AUTOLOCK_MS)
+}
+function vaultLock() {
+  _vaultKey = null; _vaultItems = null; _vaultReveal = new Set()
+  if (_vaultLockTimer) { clearTimeout(_vaultLockTimer); _vaultLockTimer = null }
+  renderVault()
+}
+
+async function renderVault() {
+  const el = document.getElementById('page-vault'); if (!el) return
+  if (_vaultKey && _vaultItems) { el.innerHTML = _vaultListHtml(); _vaultArmAutoLock(); return }
+  el.innerHTML = `<div style="text-align:center;color:var(--text3);padding:30px">⏳ Sprawdzam sejf...</div>`
+  try { const d = await getDoc(doc(db, 'vault', 'data')); _vaultDoc = d.exists() ? d.data() : null }
+  catch (e) { el.innerHTML = `<div style="color:var(--neon5);padding:20px">Błąd odczytu sejfu: ${_vEsc(e?.message || e)}</div>`; return }
+  el.innerHTML = _vaultDoc ? _vaultUnlockHtml() : _vaultSetupHtml()
+  setTimeout(() => document.getElementById('vault-pass')?.focus(), 60)
+}
+
+function _vaultShell(inner) {
+  return `<div style="max-width:520px;margin:0 auto">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:20px">🔐</span><span style="font-size:17px;font-weight:700;color:var(--text)">Sejf</span></div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:16px">Hasła szyfrowane w przeglądarce (AES-256). W chmurze tylko szyfrogram. ⚠️ Zapomniane hasło główne = brak dostępu (bez odzyskiwania). Nie trzymaj tu seedów/kluczy krypto.</div>
+    ${inner}</div>`
+}
+function _vaultSetupHtml() {
+  return _vaultShell(`
+    <div class="form-card">
+      <div class="form-title">Utwórz sejf — ustaw hasło główne</div>
+      <div class="form-label">Hasło główne (min. 8 znaków)</div>
+      <input class="form-input" type="password" id="vault-pass" autocomplete="new-password" placeholder="Wymyśl mocne hasło">
+      <div class="form-label" style="margin-top:8px">Powtórz hasło</div>
+      <input class="form-input" type="password" id="vault-pass2" autocomplete="new-password" placeholder="Jeszcze raz">
+      <div style="font-size:11px;color:var(--neon5);margin:10px 0">Zapamiętaj je dobrze — nie da się go odzyskać.</div>
+      <button class="btn btn-primary" onclick="vaultSetup()">🔐 Utwórz sejf</button>
+    </div>`)
+}
+function _vaultUnlockHtml() {
+  return _vaultShell(`
+    <div class="form-card">
+      <div class="form-title">Odblokuj sejf</div>
+      <div class="form-label">Hasło główne</div>
+      <input class="form-input" type="password" id="vault-pass" autocomplete="current-password" placeholder="Podaj hasło główne" onkeydown="if(event.key==='Enter')vaultUnlock()">
+      <button class="btn btn-primary" style="margin-top:10px" onclick="vaultUnlock()">🔓 Odblokuj</button>
+    </div>`)
+}
+function _vaultListHtml() {
+  const items = _vaultItems.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+  const rows = items.length ? items.map(it => {
+    const shown = _vaultReveal.has(it.id)
+    return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span style="font-size:14px;font-weight:700;color:var(--text);flex:1">${_vEsc(it.name || '(bez nazwy)')}</span>
+        <button class="btn" style="padding:3px 9px;font-size:11px" onclick="vaultEdit('${it.id}')">✏️</button>
+        <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="vaultDelete('${it.id}')">✕</button>
+      </div>
+      ${it.login ? `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);margin-bottom:4px"><span style="color:var(--text3);min-width:56px">login</span><span style="flex:1;word-break:break-all">${_vEsc(it.login)}</span><button class="btn" style="padding:2px 8px;font-size:11px" onclick="vaultCopy('${it.id}','login')">📋</button></div>` : ''}
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);margin-bottom:4px"><span style="color:var(--text3);min-width:56px">hasło</span><span style="flex:1;font-family:monospace;word-break:break-all">${shown ? _vEsc(it.password || '') : '••••••••'}</span><button class="btn" style="padding:2px 8px;font-size:11px" onclick="vaultToggle('${it.id}')">${shown ? '🙈' : '👁'}</button><button class="btn" style="padding:2px 8px;font-size:11px" onclick="vaultCopy('${it.id}','password')">📋</button></div>
+      ${it.url ? `<div style="font-size:11px;color:var(--text3);margin-top:4px;word-break:break-all">🔗 ${_vEsc(it.url)}</div>` : ''}
+      ${it.note ? `<div style="font-size:11px;color:var(--text3);margin-top:4px;white-space:pre-wrap">📝 ${_vEsc(it.note)}</div>` : ''}
+    </div>`
+  }).join('') : `<div style="text-align:center;color:var(--text3);padding:24px">Sejf jest pusty. Dodaj pierwszą pozycję.</div>`
+  return `<div style="max-width:560px;margin:0 auto">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+      <span style="font-size:17px;font-weight:700;color:var(--text)">🔐 Sejf <span style="font-size:11px;color:#10b981;font-weight:600">• odblokowany</span></span>
+      <button class="btn btn-primary" style="margin-left:auto" onclick="vaultAdd()">+ Dodaj</button>
+      <button class="btn" onclick="vaultLock()">🔒 Zablokuj</button>
+    </div>
+    <div style="font-size:10.5px;color:var(--text3);margin-bottom:12px">Auto-blokada po 5 min bezczynności lub przy zamknięciu karty.</div>
+    ${rows}</div>`
+}
+
+async function vaultSetup() {
+  const p1 = document.getElementById('vault-pass')?.value || ''
+  const p2 = document.getElementById('vault-pass2')?.value || ''
+  if (p1.length < 8) { toast('Hasło musi mieć min. 8 znaków'); return }
+  if (p1 !== p2) { toast('Hasła nie są takie same'); return }
+  try {
+    const salt = crypto.getRandomValues(new Uint8Array(16))
+    const key = await _vDeriveKey(p1, salt)
+    const ver = await _vEnc(key, VAULT_VERIFIER)
+    const data = await _vEnc(key, JSON.stringify([]))
+    const docObj = { salt: _b64(salt), ver, data, createdAt: nowStr(), updatedAt: nowStr() }
+    await setDoc(doc(db, 'vault', 'data'), docObj)
+    _vaultDoc = docObj; _vaultKey = key; _vaultItems = []
+    toast('🔐 Sejf utworzony ✓')
+    renderVault()
+  } catch (e) { toast('Błąd tworzenia sejfu: ' + (e?.message || e)) }
+}
+async function vaultUnlock() {
+  const pw = document.getElementById('vault-pass')?.value || ''
+  if (!pw || !_vaultDoc) return
+  try {
+    const key = await _vDeriveKey(pw, _unb64(_vaultDoc.salt))
+    let ok = false
+    try { ok = (await _vDec(key, _vaultDoc.ver.iv, _vaultDoc.ver.ct)) === VAULT_VERIFIER } catch (_) { ok = false }
+    if (!ok) { toast('Nieprawidłowe hasło główne'); return }
+    _vaultKey = key
+    _vaultItems = JSON.parse(await _vDec(key, _vaultDoc.data.iv, _vaultDoc.data.ct) || '[]')
+    renderVault()
+  } catch (e) { toast('Błąd odblokowania: ' + (e?.message || e)) }
+}
+async function _vaultSave() {
+  if (!_vaultKey) return
+  const data = await _vEnc(_vaultKey, JSON.stringify(_vaultItems))
+  await setDoc(doc(db, 'vault', 'data'), { data, updatedAt: nowStr() }, { merge: true })
+  if (_vaultDoc) _vaultDoc.data = data
+}
+function vaultToggle(id) { if (_vaultReveal.has(id)) _vaultReveal.delete(id); else _vaultReveal.add(id); renderVault() }
+function vaultCopy(id, field) {
+  const it = _vaultItems?.find(x => x.id === id); if (!it) return
+  copyText(it[field] || ''); _vaultArmAutoLock()
+}
+function vaultAdd() { _vaultForm(null) }
+function vaultEdit(id) { _vaultForm(_vaultItems?.find(x => x.id === id) || null) }
+function _vaultForm(it) {
+  const e = it || { name: '', login: '', password: '', url: '', note: '' }
+  openAppModal(`
+    <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:12px">${it ? 'Edytuj pozycję' : 'Nowa pozycja'}</div>
+    <div class="form-label">Nazwa *</div><input class="form-input" id="v-f-name" value="${_vEsc(e.name)}" placeholder="np. Forum XYZ">
+    <div class="form-label" style="margin-top:8px">Login</div><input class="form-input" id="v-f-login" value="${_vEsc(e.login)}" autocomplete="off">
+    <div class="form-label" style="margin-top:8px">Hasło</div><input class="form-input" id="v-f-pass" value="${_vEsc(e.password)}" autocomplete="off">
+    <div class="form-label" style="margin-top:8px">URL</div><input class="form-input" id="v-f-url" value="${_vEsc(e.url)}" autocomplete="off">
+    <div class="form-label" style="margin-top:8px">Notatka</div><textarea class="form-input" id="v-f-note" style="min-height:60px">${_vEsc(e.note)}</textarea>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="btn btn-primary" onclick="vaultSaveItem('${it ? it.id : ''}')">Zapisz</button>
+      <button class="btn" onclick="closeAppModal()">Anuluj</button>
+    </div>`, 480)
+}
+async function vaultSaveItem(id) {
+  const name = document.getElementById('v-f-name')?.value.trim()
+  if (!name) { toast('Podaj nazwę'); return }
+  const entry = {
+    id: id || ('v_' + uid()),
+    name,
+    login: document.getElementById('v-f-login')?.value || '',
+    password: document.getElementById('v-f-pass')?.value || '',
+    url: document.getElementById('v-f-url')?.value.trim() || '',
+    note: document.getElementById('v-f-note')?.value || '',
+  }
+  if (id) { const i = _vaultItems.findIndex(x => x.id === id); if (i >= 0) _vaultItems[i] = entry }
+  else _vaultItems.push(entry)
+  try { await _vaultSave(); closeAppModal(); renderVault(); toast('Zapisano ✓') }
+  catch (e) { toast('Błąd zapisu: ' + (e?.message || e)) }
+}
+async function vaultDelete(id) {
+  const it = _vaultItems?.find(x => x.id === id)
+  if (!confirm(`Usunąć "${it?.name || 'tę pozycję'}" z sejfu?`)) return
+  _vaultItems = _vaultItems.filter(x => x.id !== id)
+  try { await _vaultSave(); renderVault(); toast('Usunięto ✓') }
+  catch (e) { toast('Błąd: ' + (e?.message || e)) }
+}
+// Auto-lock przy ukryciu/zamknięciu karty (dodatkowe zabezpieczenie)
+try { document.addEventListener('visibilitychange', () => { if (document.hidden && _vaultKey) vaultLock() }) } catch (_) {}
+// ══ KONIEC: SEJF ═══════════════════════════════════════════════════
 
 // Klik w kafelek statystyk → ustawia filtr statusu i odświeża listę
 function filterByStatus(status) {
@@ -6039,7 +6228,7 @@ async function seedApps(btn) {
 // ══ 🧩 KOLEJNOŚĆ GŁÓWNYCH ZAKŁADEK (v2.40) ═══════════════════════
 // Przy starcie przestawiamy istniejące węzły .tab w pasku wg config/tabOrder.
 // NIE rusza switchTab/treści zakładek — tylko zmienia kolejność DOM.
-const DEFAULT_TAB_ORDER = ['main','moje','todo','notatki','przypomnienia','ref','portfel','konta','manual','airdrop','stats','aitools','apps','wiecej']
+const DEFAULT_TAB_ORDER = ['main','moje','todo','notatki','przypomnienia','ref','portfel','konta','manual','airdrop','stats','aitools','apps','vault','wiecej']
 
 function applyTabOrder(order) {
   const bar = document.querySelector('.tabs')
@@ -6419,6 +6608,7 @@ function buildApp() {
       <button class="tab"        data-tab="stats"   onclick="switchTab('stats')">📊 Statystyki</button>
       <button class="tab"        data-tab="aitools" onclick="switchTab('aitools')">🤖 AI</button>
       <button class="tab"        data-tab="apps"    onclick="switchTab('apps')">🚀 Aplikacje <span class="tab-badge" id="tab-apps-badge" style="background:rgba(124,58,237,.2);color:#a78bfa">0</span></button>
+      <button class="tab"        data-tab="vault"   onclick="switchTab('vault')">🔐 Sejf</button>
       <button class="tab"        data-tab="wiecej"  onclick="switchTab('wiecej')">📂 Więcej <span class="tab-badge" id="tab-wiecej-badge" style="background:rgba(245,158,11,.2);color:#f59e0b">0</span><span id="rail-more-arrow" onclick="event.stopPropagation();toggleRailMore()" style="cursor:pointer;padding:0 6px;font-size:13px" title="Rozwiń podzakładki">▾</span></button>
       <div id="rail-more-sub" style="display:none;flex-direction:column;gap:2px;padding:2px 0 6px 16px"></div>
     </div>
@@ -7009,6 +7199,9 @@ function buildApp() {
       <div id="apps-grid"><div class="loading">Ładowanie...</div></div>
     </div>
 
+    <!-- 🔐 SEJF -->
+    <div id="page-vault" class="page"></div>
+
     <!-- WIĘCEJ (mega-zakładka z podzakładkami) -->
     <div id="page-wiecej" class="page">
       <div class="subnav">
@@ -7573,6 +7766,7 @@ Object.assign(window, {
   botGo, openMoreSheet, closeMoreSheet,
   toggleRailMore, railSub,
   filterReady, clearReadyFilter, saveHabitFromSettings,
+  renderVault, vaultSetup, vaultUnlock, vaultLock, vaultAdd, vaultEdit, vaultSaveItem, vaultDelete, vaultToggle, vaultCopy,
 })
 
 // ── PUBLIKUJ NA X ────────────────────────────────────────────────
