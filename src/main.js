@@ -1,13 +1,12 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.47
+// Wersja:          v2.48
 // Data:            2026-06-20
-// Zmiany:          🔐 Sejf — zaszyfrowane hasła. AES-GCM 256 + PBKDF2 w przeglądarce,
-//                  do Firebase (vault/data) leci TYLKO szyfrogram. Hasło główne/klucz
-//                  tylko w pamięci. Weryfikator hasła, auto-lock 5 min + przy ukryciu
-//                  karty, kopiuj bez pokazywania. Jeden blok na całą listę.
-// Poprzednia:      v2.46 (nawyk publikacji: gotowce + seria + push)
-// Git tag:         v2.47
+// Zmiany:          🔐 Sejf: kategorie pozycji (pole „Kategoria" z podpowiedziami) —
+//                  lista grupowana nagłówkami (np. wszystkie Telegramy razem),
+//                  puste = „Inne". Reszta sejfu bez zmian.
+// Poprzednia:      v2.47 (🔐 Sejf — zaszyfrowane hasła)
+// Git tag:         v2.48
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -3366,8 +3365,12 @@ function _vaultUnlockHtml() {
     </div>`)
 }
 function _vaultListHtml() {
-  const items = _vaultItems.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-  const rows = items.length ? items.map(it => {
+  const items = _vaultItems.slice()
+  // grupowanie po kategorii
+  const groups = {}
+  items.forEach(it => { const c = (it.category || '').trim() || 'Inne'; (groups[c] = groups[c] || []).push(it) })
+  const cats = Object.keys(groups).sort((a, b) => a === 'Inne' ? 1 : b === 'Inne' ? -1 : a.localeCompare(b))
+  const itemHtml = it => {
     const shown = _vaultReveal.has(it.id)
     return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
@@ -3379,6 +3382,17 @@ function _vaultListHtml() {
       <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);margin-bottom:4px"><span style="color:var(--text3);min-width:56px">hasło</span><span style="flex:1;font-family:monospace;word-break:break-all">${shown ? _vEsc(it.password || '') : '••••••••'}</span><button class="btn" style="padding:2px 8px;font-size:11px" onclick="vaultToggle('${it.id}')">${shown ? '🙈' : '👁'}</button><button class="btn" style="padding:2px 8px;font-size:11px" onclick="vaultCopy('${it.id}','password')">📋</button></div>
       ${it.url ? `<div style="font-size:11px;color:var(--text3);margin-top:4px;word-break:break-all">🔗 ${_vEsc(it.url)}</div>` : ''}
       ${it.note ? `<div style="font-size:11px;color:var(--text3);margin-top:4px;white-space:pre-wrap">📝 ${_vEsc(it.note)}</div>` : ''}
+    </div>`
+  }
+  const rows = items.length ? cats.map(c => {
+    const list = groups[c].slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    return `<div style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:8px;margin:0 2px 8px">
+        <span style="font-size:12px;font-weight:700;color:var(--neon);text-transform:uppercase;letter-spacing:.5px">${_vEsc(c)}</span>
+        <span style="font-size:10px;color:var(--text3);background:var(--bg3);border-radius:10px;padding:1px 7px">${list.length}</span>
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+      </div>
+      ${list.map(itemHtml).join('')}
     </div>`
   }).join('') : `<div style="text-align:center;color:var(--text3);padding:24px">Sejf jest pusty. Dodaj pierwszą pozycję.</div>`
   return `<div style="max-width:560px;margin:0 auto">
@@ -3435,10 +3449,14 @@ function vaultCopy(id, field) {
 function vaultAdd() { _vaultForm(null) }
 function vaultEdit(id) { _vaultForm(_vaultItems?.find(x => x.id === id) || null) }
 function _vaultForm(it) {
-  const e = it || { name: '', login: '', password: '', url: '', note: '' }
+  const e = it || { name: '', login: '', password: '', url: '', note: '', category: '' }
+  const cats = [...new Set((_vaultItems || []).map(x => (x.category || '').trim()).filter(Boolean))].sort()
   openAppModal(`
     <div style="font-size:15px;font-weight:700;color:var(--neon);margin-bottom:12px">${it ? 'Edytuj pozycję' : 'Nowa pozycja'}</div>
-    <div class="form-label">Nazwa *</div><input class="form-input" id="v-f-name" value="${_vEsc(e.name)}" placeholder="np. Forum XYZ">
+    <div class="form-label">Kategoria (np. Telegram) — grupuje konta</div>
+    <input class="form-input" id="v-f-cat" list="v-cat-list" value="${_vEsc(e.category)}" placeholder="np. Telegram / puste = Inne" autocomplete="off">
+    <datalist id="v-cat-list">${cats.map(c => `<option value="${_vEsc(c)}"></option>`).join('')}</datalist>
+    <div class="form-label" style="margin-top:8px">Nazwa *</div><input class="form-input" id="v-f-name" value="${_vEsc(e.name)}" placeholder="np. Konto główne / @nick">
     <div class="form-label" style="margin-top:8px">Login</div><input class="form-input" id="v-f-login" value="${_vEsc(e.login)}" autocomplete="off">
     <div class="form-label" style="margin-top:8px">Hasło</div><input class="form-input" id="v-f-pass" value="${_vEsc(e.password)}" autocomplete="off">
     <div class="form-label" style="margin-top:8px">URL</div><input class="form-input" id="v-f-url" value="${_vEsc(e.url)}" autocomplete="off">
@@ -3454,6 +3472,7 @@ async function vaultSaveItem(id) {
   const entry = {
     id: id || ('v_' + uid()),
     name,
+    category: document.getElementById('v-f-cat')?.value.trim() || '',
     login: document.getElementById('v-f-login')?.value || '',
     password: document.getElementById('v-f-pass')?.value || '',
     url: document.getElementById('v-f-url')?.value.trim() || '',
