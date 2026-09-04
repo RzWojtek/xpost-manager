@@ -3826,14 +3826,28 @@ async function deleteNote(id) {
 
 // ── RENDER: REF LINKS ─────────────────────────────────────────────
 function renderRef() {
-  const list = Object.values(refLinks).sort((a,b)=>a.name.localeCompare(b.name))
+  // Sortowanie: najnowsze (ostatnio dodane) na górze → najstarsze na dole.
+  // Klucz z addedAt (PL 'dd.mm.yyyy hh:mm:ss' lub ISO); gdy brak → fallback do id
+  // (uid() zaczyna się od Date.now() w base36, więc jest chronologiczne).
+  const refTs = r => {
+    const s = r.addedAt || ''
+    const m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})[ ,]+(\d{1,2}):(\d{2})(?::(\d{2}))?/)  // PL
+    if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}T${m[4].padStart(2,'0')}:${m[5]}:${m[6]||'00'}`
+    if (/^\d{4}-/.test(s)) return s.slice(0,19).replace(' ','T')  // ISO
+    return ''
+  }
+  const list = Object.values(refLinks).sort((a,b)=>{
+    const ta=refTs(a), tb=refTs(b)
+    if (ta && tb && ta!==tb) return tb.localeCompare(ta)     // najnowsze na górze
+    return (b.id||'').localeCompare(a.id||'')                // fallback chronologiczny
+  })
   const el = document.getElementById('ref-cards')
   if(!el) return
   if(!list.length){el.innerHTML='<div class="empty">Brak linków referencyjnych.</div>';return}
   el.innerHTML = list.map(r=>{
     const editing=!!r._editing
     const auto=!!r.autoImported
-    return `<div class="ref-card" id="refcard-${r.id}" style="${auto&&!editing?'border:1px solid #f59e0b;background:rgba(245,158,11,.06)':''}">
+    return `<div class="ref-card${editing?' editing':''}" id="refcard-${r.id}" style="${auto&&!editing?'border:1px solid #f59e0b;background:rgba(245,158,11,.06)':''}">
       ${editing ? `
         <div class="edit-form">
           <div><div class="form-label">Nazwa projektu</div>
@@ -4203,7 +4217,13 @@ function renderTgWpisy() {
 function renderKonta() {
   const el = document.getElementById('konta-cards')
   if (!el) return
-  const list = Object.entries(konta).sort(([,a],[,b]) => a.name.localeCompare(b.name))
+  // Kategorie z "wallet" w nazwie na samą górę, reszta alfabetycznie
+  const isWallet = k => /wallet/i.test(k.name || '')
+  const list = Object.entries(konta).sort(([,a],[,b]) => {
+    const wa = isWallet(a), wb = isWallet(b)
+    if (wa !== wb) return wa ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
   if (!list.length) {
     el.innerHTML = '<div class="empty">Brak kategorii kont. Kliknij "+ Dodaj kategorię" aby zacząć.</div>'
     return
