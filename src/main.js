@@ -2197,20 +2197,41 @@ async function loadRejectedIndex() {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const meta = await getDoc(doc(db, 'rejectedIndex', 'meta'))
-      const shardCount = meta.exists() ? (meta.data().shardCount || 0) : 0
-      let topSize = 0
-      for (let i = 0; i < shardCount; i++) {
+      const metaExists = meta.exists()
+      const metaShardCount = metaExists ? (meta.data().shardCount || 0) : 0
+      // Świeża baza (brak meta i brak shard_0) — nie ma nic do zasiania. To OK.
+      if (!metaExists) {
+        const s0 = await getDoc(doc(db, 'rejectedIndex', 'shard_0'))
+        if (!s0.exists()) { _rejShardCount = 0; _rejTopSize = 0; return }
+      }
+      // NIE ufamy meta.shardCount (potrafi być nieaktualne) — czytamy shardy
+      // po kolei aż trafimy na nieistniejący. Dzięki temu zawsze zasiewamy WSZYSTKIE.
+      let i = 0, topSize = 0, seeded = 0
+      while (true) {
         const sd = await getDoc(doc(db, 'rejectedIndex', `shard_${i}`))
-        const ids = sd.exists() ? (sd.data().ids || {}) : {}
+        if (!sd.exists()) break
+        const ids = sd.data().ids || {}
         let cnt = 0
         for (const id in ids) {
           cnt++
           if (!posts[id]) posts[id] = { id, status: 'Odrzucone', _stub: true }
         }
-        if (i === shardCount - 1) topSize = cnt
+        topSize = cnt
+        seeded += cnt
+        i++
       }
-      _rejShardCount = shardCount
+      // Bezpiecznik: meta istnieje (baza NIE jest świeża), ale nie zasialiśmy nic
+      // ani nie znaleźliśmy shardów → coś nie tak z odczytem. Rzuć błąd = wstrzymaj sync.
+      if (i === 0 && metaExists) {
+        throw new Error('rejectedIndex: meta istnieje, ale nie znaleziono żadnego sharda')
+      }
+      // Ostrzeżenie gdy realna liczba shardów < meta.shardCount (diagnostyka, bez blokady)
+      if (metaShardCount && i < metaShardCount) {
+        console.warn(`[rejectedIndex] przeczytano ${i} shardów, meta mówi ${metaShardCount}`)
+      }
+      _rejShardCount = i
       _rejTopSize = topSize
+      console.info(`[rejectedIndex] zasiano ${seeded} ID z ${i} shardów`)
       return
     } catch (e) {
       lastErr = e
