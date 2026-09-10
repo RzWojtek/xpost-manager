@@ -1,12 +1,14 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.48
-// Data:            2026-06-20
-// Zmiany:          🔐 Sejf: kategorie pozycji (pole „Kategoria" z podpowiedziami) —
-//                  lista grupowana nagłówkami (np. wszystkie Telegramy razem),
-//                  puste = „Inne". Reszta sejfu bez zmian.
-// Poprzednia:      v2.47 (🔐 Sejf — zaszyfrowane hasła)
-// Git tag:         v2.48
+// Wersja:          v2.50
+// Data:            2026-09-11
+// Zmiany:          Wzbogacenie wpisów o dane z X: avatar autora + pasek metryk
+//                  (❤ polubienia / 🔁 RT / 💬 odpowiedzi). syncSheets: zakres
+//                  A2:H→A2:M + 4 nowe pola w obiekcie post (dedup NIETKNIĘTY).
+//                  renderMain: avatar w nagłówku + metryki — tylko gdy dane są
+//                  (stare wpisy wyglądają bez zmian). Zero nowych zapytań Firebase.
+// Poprzednia:      v2.49 (utwardzenie loadRejectedIndex — plik miał etykietę v2.48)
+// Git tag:         v2.50
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -21,8 +23,8 @@ import { getMessaging, getToken, onMessage, isSupported } from 'firebase/messagi
 const SHEET_ID  = import.meta.env.VITE_SHEET_ID
 const SHEET_TAB = import.meta.env.VITE_SHEET_TAB || 'Arkusz1'
 const API_KEY   = import.meta.env.VITE_SHEETS_API_KEY
-// Kolumny Sheets (0-indexed): A=data B=konto C=tekst D=link E=linki F=id G=done H=zdjecia
-const COL = { date:0, account:1, text:2, link:3, links:4, id:5, img:7, type:8 }
+// Kolumny Sheets (0-indexed): A=data B=konto C=tekst D=link E=linki F=id G=done H=zdjecia I=typ J=favs K=rts L=replies M=avatar
+const COL = { date:0, account:1, text:2, link:3, links:4, id:5, img:7, type:8, favs:9, rts:10, replies:11, avatar:12 }
 
 // ── AI PARAFRAZA — SYSTEM ROTACJI MODELI ─────────────────────────
 const AI_MODELS = [
@@ -2312,7 +2314,7 @@ async function syncSheets() {
   const infoEl = document.getElementById('sync-info')
   if (infoEl) infoEl.textContent = 'synchronizacja...'
   try {
-    const range = encodeURIComponent(`${SHEET_TAB}!A2:H`)
+    const range = encodeURIComponent(`${SHEET_TAB}!A2:M`)
     const url   = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?key=${API_KEY}`
     const res   = await fetch(url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -2339,6 +2341,11 @@ async function syncSheets() {
         para:    '',
         status:  'Nowy',
         addedAt: nowStr(),
+        // NOWE — dane z X. Puste dla starych wierszy (bez J–M) = zero regresji.
+        favs:    row[COL.favs]    ?? '',
+        rts:     row[COL.rts]     ?? '',
+        replies: row[COL.replies] ?? '',
+        avatar:  row[COL.avatar]  || '',
       }
       await setDoc(doc(db,'posts',id), post)
       posts[id] = post
@@ -2764,6 +2771,7 @@ function renderMain() {
     return `<div class="card" id="card-${p.id}">
       <div class="card-head">
         <input type="checkbox" class="main-chk" ${mainSelected.has(p.id)?'checked':''} onchange="mainToggleOne('${p.id}',this.checked)" style="width:15px;height:15px;accent-color:var(--neon5);cursor:pointer;flex-shrink:0;margin-right:2px">
+        ${(p.avatar && /^https?:\/\//.test(p.avatar)) ? `<img src="${p.avatar}" alt="" loading="lazy" onerror="this.style.display='none'" style="width:24px;height:24px;border-radius:50%;flex-shrink:0;object-fit:cover;margin-right:2px">` : ''}
         <span class="account" onclick="showAccountPanel('${p.account}')" style="cursor:pointer;text-decoration:underline dotted" title="Kliknij — podgląd wpisów tego konta">@${p.account}</span>
         ${(()=>{ const n=Object.values(posts).filter(x=>x.account===p.account&&x.status==='Nowy').length; return n>1?`<span style="font-size:10px;padding:1px 5px;border-radius:8px;background:rgba(0,229,255,.12);color:var(--neon);border:1px solid rgba(0,229,255,.25);font-weight:700" title="Nowych wpisów tego konta">${n}</span>`:''; })()}
         ${(p.isRT || (p.account&&p.account.includes(' RT @'))) ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);font-weight:700">RT</span>' : ''}
@@ -2774,6 +2782,7 @@ function renderMain() {
           ${postStatusOptions(p.status)}
         </select>
       </div>
+      ${(()=>{const f=p.favs,r=p.rts,c=p.replies;const has=(f!==''&&f!=null)||(r!==''&&r!=null)||(c!==''&&c!=null);if(!has)return '';const n=v=>{const x=Number(v);return isNaN(x)?(v||0):x};return `<div class="card-metrics" style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text2);padding:4px 2px 0"><span title="Polubienia">❤️ ${n(f)}</span><span title="Podania dalej">🔁 ${n(r)}</span><span title="Odpowiedzi">💬 ${n(c)}</span></div>`;})()}
       ${linksH}${imgsH}
       ${refLinksHtml(p.id)}
       <div class="card-body">
