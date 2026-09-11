@@ -1,14 +1,14 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.50
+// Wersja:          v2.51
 // Data:            2026-09-11
-// Zmiany:          Wzbogacenie wpisów o dane z X: avatar autora + pasek metryk
-//                  (❤ polubienia / 🔁 RT / 💬 odpowiedzi). syncSheets: zakres
-//                  A2:H→A2:M + 4 nowe pola w obiekcie post (dedup NIETKNIĘTY).
-//                  renderMain: avatar w nagłówku + metryki — tylko gdy dane są
-//                  (stare wpisy wyglądają bez zmian). Zero nowych zapytań Firebase.
-// Poprzednia:      v2.49 (utwardzenie loadRejectedIndex — plik miał etykietę v2.48)
-// Git tag:         v2.50
+// Zmiany:          Auto-wykrywanie projektów (bez listy ręcznej): projekt = @handle
+//                  wspomniany przez >=3 różne konta; wpis pasuje po @ lub całym
+//                  słowie (nazwy pospolite tylko z @). Chip "Nazwa N" na karcie
+//                  (klik = filtr), dropdown "Projekty" w pasku filtrów, licznik z
+//                  postów poza Odrzucone/Opublikowane/Historyczne. Frontend-only, 0 zapytań.
+// Poprzednia:      v2.50 (avatar + metryki z X)
+// Git tag:         v2.51
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -893,6 +893,7 @@ let fSearch  = ''
 let fExclude = ''
 let fExcludeMode = 'any'  // 'any' = LUB (którekolwiek słowo), 'all' = I (wszystkie słowa)
 let fType    = ''
+let fProject = ''   // filtr po projekcie (auto-wykrywanym z @wzmianek)
 // Panel szybkiego przeglądu
 let fMaxLines  = ''   // maks. liczba linii tekstu
 let fMinLines  = ''   // min. liczba linii tekstu
@@ -2599,6 +2600,64 @@ let _mainObserver = null
 
 function loadMoreMain() { _mainLimit += MAIN_PAGE; renderMain() }
 
+// ── PROJEKTY — auto-wykrywanie po @wzmiankach (bez listy ręcznej) ─────
+// Projekt = @handle, którego użyło >= PROJ_MIN_ACCTS RÓŻNYCH obserwowanych
+// kont (to odróżnia projekt od losowego @kogoś). Wpis należy do projektu,
+// gdy @-taguje ten handle. Liczone z postów poza Odrzucone/Opublikowane/Historyczne.
+// ŚWIADOMIE tylko @wzmianki — bez dopasowania po zwykłym słowie, które na
+// realnych danych dawało szum (Re/Join/Crypto/Mint...). Zero zapytań (pamięć).
+const PROJ_MIN_ACCTS    = 3   // ile różnych kont musi wspomnieć handle, by był projektem
+const PROJ_DROPDOWN_MIN = 4   // do dropdownu trafiają projekty z min tyloma wpisami
+const PROJ_EXCLUDE_STATUS = new Set(['Odrzucone','Opublikowane','Historyczne'])  // te statusy NIE liczą się do projektów
+let _projIndex = null, _projByPost = null, _projSig = null
+
+function _projLabel(handle) { return '@' + String(handle) }  // wierny handle — bez zgadywania/kolizji
+
+function buildProjectIndex() {
+  // lekki podpis — przebudowa tylko gdy zmienił się zbiór nie-odrzuconych
+  let cnt = 0, last = ''
+  for (const id in posts) { const p = posts[id]; if (p && !PROJ_EXCLUDE_STATUS.has(p.status)) { cnt++; last = id } }
+  const sig = cnt + '|' + last
+  if (_projIndex && sig === _projSig) return
+  _projSig = sig
+
+  const active = []
+  for (const id in posts) {
+    const p = posts[id]
+    if (p && !PROJ_EXCLUDE_STATUS.has(p.status) && !p._stub && p.text) active.push(p)
+  }
+  // @wzmianki wg różnych kont + zapamiętaj wzmianki per-post
+  const mentAccts = {}, postMents = {}
+  for (const p of active) {
+    const base = String(p.account||'').split(' RT @')[0].replace(/^@/,'').toLowerCase()
+    const ms = new Set((String(p.text).match(/@(\w{2,20})/g)||[]).map(s => s.slice(1).toLowerCase()))
+    postMents[p.id] = ms
+    for (const m of ms) { (mentAccts[m] = mentAccts[m] || new Set()).add(base) }
+  }
+  // każdy handle >= PROJ_MIN_ACCTS kont = osobny projekt
+  const index = {}, byPost = {}
+  for (const h in mentAccts) {
+    if (mentAccts[h].size < PROJ_MIN_ACCTS) continue
+    index[h] = { name: h, display: _projLabel(h), count: 0, ids: new Set() }
+  }
+  for (const p of active) {
+    const hit = []
+    for (const h of postMents[p.id]) { if (index[h]) { hit.push(h); index[h].count++; index[h].ids.add(p.id) } }
+    if (hit.length) byPost[p.id] = hit
+  }
+  _projIndex = index; _projByPost = byPost
+}
+
+function projectsForPost(id) { buildProjectIndex(); return (_projByPost && _projByPost[id]) || [] }
+function projectList()       { buildProjectIndex(); return Object.values(_projIndex||{}).filter(x=>x.count>0).sort((a,b)=>b.count-a.count) }
+
+function filterByProject(name) {
+  fProject = (fProject === name) ? '' : name
+  const sel = document.getElementById('f-project'); if (sel) sel.value = fProject
+  renderMain()
+}
+function onProjectFilterChange(v) { fProject = v || ''; renderMain() }
+
 function setupMainSentinel() {
   const s = document.getElementById('main-sentinel')
   if (_mainObserver) { _mainObserver.disconnect(); _mainObserver = null }
@@ -2621,6 +2680,8 @@ function renderMain() {
   if (inpEx)  fExclude = inpEx.value.toLowerCase()
   const selExMode = document.getElementById('f-exclude-mode')
   if (selExMode) fExcludeMode = selExMode.value
+  const selProj = document.getElementById('f-project')
+  if (selProj) fProject = selProj.value
   // Panel szybkiego przeglądu
   const inpMaxLines = document.getElementById('f-max-lines')
   const inpMinLines = document.getElementById('f-min-lines')
@@ -2642,7 +2703,7 @@ function renderMain() {
   if (chkDupes)     fDupes     = chkDupes.checked
 
   // Reset paginacji przy zmianie filtrów (każda zmiana → wracamy na początek listy)
-  const _sig = [fAccount,fStatus,fType,fSearch,fExclude,fExcludeMode,fMaxLines,fMinLines,fMaxChars,fNoLinks,fNoMedia,fDateFrom,fDateTo,fOlderDays,fDupes].join('|')
+  const _sig = [fAccount,fStatus,fType,fProject,fSearch,fExclude,fExcludeMode,fMaxLines,fMinLines,fMaxChars,fNoLinks,fNoMedia,fDateFrom,fDateTo,fOlderDays,fDupes].join('|')
   if (_sig !== _lastFilterSig) { _mainLimit = MAIN_PAGE; _lastFilterSig = _sig }
 
   // Wykryj duplikaty — wpisy z tym samym początkiem tekstu (pierwsze 60 znaków)
@@ -2671,6 +2732,8 @@ function renderMain() {
 
   const now = new Date()
 
+  buildProjectIndex()   // odśwież indeks projektów (memoizowany — tani gdy bez zmian)
+
   const list = Object.values(posts).filter(p => {
     if (p.status === 'Odrzucone' || p.status === 'Opublikowane') return false
     if (_filterReady && !(p.para && p.para.trim())) return false
@@ -2680,6 +2743,7 @@ function renderMain() {
     if (fType === 'rt'   && !isRT)  return false
     if (fType === 'post' &&  isRT)  return false
     if (fSearch  && !p.text.toLowerCase().includes(fSearch)) return false
+    if (fProject && !projectsForPost(p.id).includes(fProject)) return false
     if (fExclude) {
       const txt = p.text.toLowerCase()
       const words = fExclude.split(/\s+/).filter(Boolean)
@@ -2737,6 +2801,16 @@ function renderMain() {
     selAcc.value = prev
   }
 
+  // Dropdown projektów — auto-lista z licznikami, posortowana malejąco
+  const selProjEl = document.getElementById('f-project')
+  if (selProjEl) {
+    const prev = fProject
+    selProjEl.innerHTML = '<option value="">Wszystkie projekty</option>' +
+      projectList().filter(x => x.count >= PROJ_DROPDOWN_MIN).slice(0, 60)
+        .map(x => `<option value="${x.name}"${x.name===prev?' selected':''}>${x.display} (${x.count})</option>`).join('')
+    selProjEl.value = prev
+  }
+
   const el = document.getElementById('main-cards')
   if (!el) return
   if (!list.length) { el.innerHTML = '<div class="empty">Brak wpisów pasujących do filtrów.</div>'; return }
@@ -2783,6 +2857,7 @@ function renderMain() {
         </select>
       </div>
       ${(()=>{const f=p.favs,r=p.rts,c=p.replies;const has=(f!==''&&f!=null)||(r!==''&&r!=null)||(c!==''&&c!=null);if(!has)return '';const n=v=>{const x=Number(v);return isNaN(x)?(v||0):x};return `<div class="card-metrics" style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text2);padding:4px 2px 0"><span title="Polubienia">❤️ ${n(f)}</span><span title="Podania dalej">🔁 ${n(r)}</span><span title="Odpowiedzi">💬 ${n(c)}</span></div>`;})()}
+      ${(()=>{const pr=projectsForPost(p.id);if(!pr.length)return '';const idx=_projIndex||{};return `<div class="card-projects" style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 2px 0">`+pr.map(name=>{const it=idx[name]||{display:name,count:0};const on=fProject===name;return `<span onclick="filterByProject('${name}')" title="Pokaż tylko wpisy o: ${it.display}" style="cursor:pointer;font-size:11px;font-weight:700;padding:3px 9px;border-radius:9px;border:1px solid ${on?'var(--neon)':'rgba(0,229,255,.3)'};background:${on?'rgba(0,229,255,.18)':'rgba(0,229,255,.06)'};color:var(--neon)">${it.display} ${it.count}</span>`}).join('')+`</div>`;})()}
       ${linksH}${imgsH}
       ${refLinksHtml(p.id)}
       <div class="card-body">
@@ -6735,6 +6810,7 @@ function buildApp() {
           <option value="post">Tylko posty</option>
           <option value="rt">Tylko RT</option>
         </select>
+        <select id="f-project" onchange="onProjectFilterChange(this.value)" title="Filtruj po projekcie (auto-wykrywanym)"><option value="">Wszystkie projekty</option></select>
         <input id="f-search" placeholder="Szukaj w treści..." oninput="renderMain()" style="flex:1;min-width:140px">
         <input id="f-exclude" placeholder="🚫 Wyklucz słowa..." oninput="renderMain()" style="flex:1;min-width:140px">
         <select id="f-exclude-mode" onchange="renderMain()" title="Tryb wykluczania słów">
@@ -7782,6 +7858,7 @@ async function vpsRemoveTg(type, ch) {
 Object.assign(window, {
   loginGoogle, logout, switchTab, switchSubTab, syncSheets,
   renderMain, setPostStatus, savePara, savePostNote, toggleExpand, copyText, addToProjects, callAIJson,
+  filterByProject, onProjectFilterChange,
   mainToggleOne, updateMainBulkBar, clearMainSelected, deleteMainSelected,
   toggleFilterPanel, resetFilterPanel, selectAllVisible, setDateFilter,
   showAccountPanel, closeAccountPanel,
