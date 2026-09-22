@@ -5816,32 +5816,209 @@ function renderStats() {
           </div>`).join('')}
       </div>
 
-      <!-- Rozkład statusów projektów -->
-      <div class="form-card">
-        <div class="form-title">📋 Statusy projektów</div>
-        ${statusEntries.map(([st,cnt])=>`
-          <div style="margin-bottom:8px">
-            <div style="display:flex;justify-content:space-between;font-size:12px">
-              <span style="color:var(--text)">${st}</span>
-              <span style="color:var(--neon4);font-weight:700">${cnt}</span>
-            </div>
-            ${bar(cnt, maxSt, (st.toUpperCase().startsWith('DONE')?'#10b981':st.toUpperCase().startsWith('TODO')?'#f59e0b':st==='Pominięty'?'#ef4444':'var(--neon)'))}
-          </div>`).join('')}
+      <!-- ══ AUTO-X: statystyki i sterowanie botem (MOD) ══ -->
+      <div id="xpost-stats" style="grid-column:1/-1"><div class="loading">Ładowanie statystyk Auto-X…</div></div>
+
+    </div>`
+
+  // MOD: wypełnij sekcję Auto-X (z pamięci) i dociągnij stan bota z Firebase
+  renderXpostStats()
+  loadXpostState()
+}
+
+// ── AUTO-X: statystyki wpisów + sterowanie botem (MOD) ───────────
+// Konta i ich statusy — MUSZĄ zgadzać się z accounts.json na VPS oraz ze statusami w apce.
+const XPOST_ACCOUNTS = [
+  { slug:'andrzej', name:'Andrzej', q:'Auto-X Andrzej', d:'Auto-wysłane Andrzej' },
+  { slug:'crypto',  name:'Crypto',  q:'Auto-X Crypto',  d:'Auto-wysłane Crypto'  },
+]
+let _xpostCur = 0                 // indeks bieżącego konta w przełączniku
+let xpostControl = {}             // { enabled, dailyMax } — panel pisze, bot czyta
+let xpostStatus  = {}             // { sentToday, health, cookiesDaysLeft, ... } — bot pisze
+let _xpostSig = ''
+function _xAcct(){ return XPOST_ACCOUNTS[_xpostCur] || XPOST_ACCOUNTS[0] }
+
+function _xDay(s){ const m = String(s||'').match(/(\d{2})\.(\d{2})\.(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null }
+
+function renderXpostStats(){
+  const box = document.getElementById('xpost-stats'); if(!box) return
+  const acct = _xAcct()
+  const all   = Object.values(posts)
+  const queue = all.filter(p => p.status === acct.q)
+  const done  = all.filter(p => p.status === acct.d)
+
+  // dane miesiąca (heatmapa + per-dzień)
+  const now = new Date(), y = now.getFullYear(), mo = now.getMonth()
+  const daysInMonth = new Date(y, mo+1, 0).getDate()
+  const perDay = {}; for(let d=1; d<=daysInMonth; d++) perDay[d] = 0
+  let verified = 0, unverified = 0
+  done.forEach(p => {
+    const ds = _xDay(p.autoSentAt)
+    if(ds){ const dt = new Date(ds); if(dt.getFullYear()===y && dt.getMonth()===mo) perDay[dt.getDate()]++ }
+    if(p.autoSentVerified === false) unverified++; else verified++
+  })
+  const maxDay = Math.max(1, ...Object.values(perDay))
+  const monthTotal = Object.values(perDay).reduce((a,b)=>a+b,0)
+
+  // seria dni z publikacją (wstecz od dziś)
+  const daySet = new Set(done.map(p => _xDay(p.autoSentAt)).filter(Boolean))
+  let streak = 0
+  for(let i=0;;i++){ const d = new Date(); d.setDate(d.getDate()-i); if(daySet.has(d.toISOString().slice(0,10))) streak++; else break }
+
+  // stan bota
+  const s = xpostStatus || {}, c = xpostControl || {}
+  const enabled  = c.enabled !== false
+  const dailyMax = c.dailyMax || s.dailyMax || 5
+  const sentToday = s.sentToday ?? 0
+  const dailyCap  = s.dailyCap  ?? dailyMax
+  const h = s.health || {}
+  const light = h.ok === true ? '#10b981' : h.ok === false ? '#ef4444' : '#6b7280'
+  const days = (s.cookiesDaysLeft ?? null)
+  const cookieColor = days == null ? '#6b7280' : days < 5 ? '#ef4444' : days < 10 ? '#f59e0b' : '#10b981'
+  const lastSent = s.lastSentAt ? String(s.lastSentAt).replace('T',' ').slice(0,16) : '—'
+
+  // heatmapa (kalendarz miesiąca, pon–niedz)
+  const firstDow = (new Date(y, mo, 1).getDay() + 6) % 7
+  let cells = ''
+  for(let i=0;i<firstDow;i++) cells += `<div></div>`
+  for(let d=1; d<=daysInMonth; d++){
+    const v = perDay[d]
+    const inten = v === 0 ? 0 : 0.25 + 0.75*(v/maxDay)
+    const bg = v === 0 ? 'var(--bg3)' : `rgba(16,185,129,${inten.toFixed(2)})`
+    const isToday = (d === now.getDate())
+    cells += `<div title="${String(d).padStart(2,'0')}.${String(mo+1).padStart(2,'0')}: ${v} wpis(ów)"
+      style="aspect-ratio:1;border-radius:5px;background:${bg};display:flex;align-items:center;justify-content:center;
+      font-size:10px;color:${v>0?'#052':'var(--text3)'};border:${isToday?'2px solid var(--neon)':'1px solid var(--border)'}">${d}</div>`
+  }
+  const dow = ['P','W','Ś','C','P','S','N'].map(x=>`<div style="text-align:center;font-size:9px;color:var(--text3)">${x}</div>`).join('')
+
+  const tile = (n,l,color)=>`<div class="stat"><div class="stat-n" style="color:${color}">${n}</div><div class="stat-l">${l}</div></div>`
+  const pct = Math.min(100, Math.round(sentToday/Math.max(1,dailyCap)*100))
+
+  box.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+
+      <!-- Sterowanie -->
+      <div class="form-card" style="grid-column:1/-1">
+        <div class="form-title">🤖 Auto-X — sterowanie botem (${acct.name})</div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          ${XPOST_ACCOUNTS.map((a,i)=>`<button class="btn ${i===_xpostCur?'btn-primary':''}" style="font-size:12px;padding:4px 12px" onclick="xpostSwitchAcct(${i})">${a.name}</button>`).join('')}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">
+          <span style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--text2)">
+            <span style="width:11px;height:11px;border-radius:50%;background:${light};box-shadow:0 0 8px ${light}"></span>
+            ${h.ok===true?'Zdrowy':h.ok===false?'Uwaga':'Brak danych'}
+          </span>
+          <button class="btn ${enabled?'btn-danger':'btn-primary'}" onclick="xpostToggleStop(${enabled?'false':'true'})">
+            ${enabled?'⏸ STOP (wstrzymaj)':'▶ Wznów'}
+          </button>
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)">
+            Limit/dzień: <input type="range" min="1" max="8" value="${dailyMax}" style="width:130px"
+              oninput="document.getElementById('xlimval').textContent=this.value"
+              onchange="xpostSetLimit(this.value)">
+            <b id="xlimval" style="color:var(--neon)">${dailyMax}</b>
+          </div>
+          <button class="btn" style="font-size:12px" onclick="loadXpostState()">🔄 Odśwież</button>
+        </div>
+        ${h.msg?`<div style="margin-top:10px;font-size:12px;color:${h.ok===false?'#ef4444':'var(--text3)'}">🩺 ${h.msg}${h.at?` <span style="color:var(--text3)">(${h.at})</span>`:''}</div>`:''}
+        ${s.lastError?`<div style="margin-top:4px;font-size:12px;color:#ef4444">⚠️ ostatni błąd: ${s.lastError}</div>`:''}
       </div>
 
-      <!-- Typy projektów -->
+      <!-- Kafelki -->
       <div class="form-card">
-        <div class="form-title">🏷 Typy projektów</div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px">
-          ${typeEntries.map(([t,cnt])=>`
-            <div style="display:flex;align-items:center;gap:5px;background:var(--bg3);padding:5px 10px;border-radius:8px">
-              <span style="font-size:12px;color:var(--text)">${t}</span>
-              <span style="font-size:13px;font-weight:700;color:var(--neon)">${cnt}</span>
-            </div>`).join('')}
+        <div class="form-title">📊 Skrót</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          ${tile(queue.length,'W kolejce','var(--neon)')}
+          ${tile(done.length,'Wysłane','#10b981')}
+          ${tile(monthTotal,'Ten miesiąc','#38bdf8')}
+          ${tile(streak,'Seria dni','#f59e0b')}
+          ${tile(verified,'Potwierdz.','#10b981')}
+          ${tile(unverified,'Niepewne','#f59e0b')}
+        </div>
+        <div style="margin-top:12px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2)">
+            <span>Dziś</span><span><b style="color:var(--neon)">${sentToday}</b>/${dailyCap}</span>
+          </div>
+          <div style="height:8px;border-radius:4px;background:var(--bg3);margin-top:4px">
+            <div style="height:8px;border-radius:4px;background:var(--neon);width:${pct}%;transition:width .3s"></div>
+          </div>
+          <div style="margin-top:10px;font-size:12px;color:var(--text3)">🕐 Ostatnia publikacja: <span style="color:var(--text2)">${lastSent}</span></div>
+          <div style="margin-top:4px;font-size:12px;color:var(--text3)">🍪 Cookies: <b style="color:${cookieColor}">${days==null?'brak daty':days+' dni'}</b>${s.cookiesExpiry?` <span style="color:var(--text3)">(do ${s.cookiesExpiry})</span>`:''}</div>
+          ${days!=null&&days<5?`<div style="margin-top:4px;font-size:12px;color:#ef4444">❗ Odśwież cookies — niedługo wygasną!</div>`:''}
         </div>
       </div>
 
+      <!-- Heatmapa -->
+      <div class="form-card">
+        <div class="form-title">🗓 Heatmapa — ${now.toLocaleString('pl-PL',{month:'long'})} ${y}</div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px">${dow}</div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">${cells}</div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text3)">Łącznie w miesiącu: <b style="color:var(--neon)">${monthTotal}</b></div>
+      </div>
+
+      <!-- Kolejka -->
+      <div class="form-card">
+        <div class="form-title">⏳ Kolejka Auto-X (${queue.length})</div>
+        ${queue.length? queue.slice(0,8).map(p=>`
+          <div style="font-size:12px;color:var(--text2);padding:5px 0;border-bottom:1px solid var(--border)">
+            ${(p.para||'').replace(/</g,'&lt;').slice(0,90)}…
+          </div>`).join('') : '<div class="empty" style="font-size:12px">Pusto — oznacz wpisy statusem Auto-X.</div>'}
+        ${queue.length>8?`<div style="font-size:11px;color:var(--text3);margin-top:6px">…i ${queue.length-8} więcej</div>`:''}
+      </div>
+
+      <!-- Historia -->
+      <div class="form-card">
+        <div class="form-title">✅ Ostatnio wysłane (${done.length})</div>
+        ${done.length? done.slice().sort((a,b)=>String(b.autoSentAt||'').localeCompare(String(a.autoSentAt||''))).slice(0,8).map(p=>`
+          <div style="font-size:12px;color:var(--text2);padding:5px 0;border-bottom:1px solid var(--border);display:flex;gap:6px;align-items:flex-start">
+            <span style="font-size:10px;color:var(--text3);white-space:nowrap">${(p.autoSentAt||'').slice(0,16)}</span>
+            <span style="flex:1">${(p.para||'').replace(/</g,'&lt;').slice(0,70)}…</span>
+            <span title="${p.autoSentVerified===false?'niezweryfikowane':'potwierdzone'}">${p.autoSentVerified===false?'⚠️':'✅'}</span>
+          </div>`).join('') : '<div class="empty" style="font-size:12px">Jeszcze nic nie wysłano.</div>'}
+      </div>
+
     </div>`
+}
+
+async function loadXpostState(){
+  const slug = _xAcct().slug
+  try{
+    const [c,s] = await Promise.all([
+      getDoc(doc(db,'xpostControl',slug)),
+      getDoc(doc(db,'xpostStatus',slug)),
+    ])
+    xpostControl = c.exists() ? c.data() : {}
+    xpostStatus  = s.exists() ? s.data() : {}
+  }catch(e){ return }  // offline / brak dokumentów — zostaw co jest
+  const sig = JSON.stringify([slug,xpostControl,xpostStatus])
+  if(sig !== _xpostSig){ _xpostSig = sig; renderXpostStats() }
+}
+
+function xpostSwitchAcct(i){
+  _xpostCur = i
+  xpostControl = {}; xpostStatus = {}; _xpostSig = ''
+  renderXpostStats()   // odśwież natychmiast (puste kafelki bota)
+  loadXpostState()     // dociągnij stan wybranego konta
+}
+
+async function xpostToggleStop(enable){
+  const slug = _xAcct().slug
+  try{
+    await setDoc(doc(db,'xpostControl',slug), { enabled: !!enable, updatedAt: new Date().toISOString() }, { merge:true })
+    xpostControl = { ...xpostControl, enabled: !!enable }
+    renderXpostStats()
+    toast(enable ? '▶ Wznowiono bota' : '⏸ Zatrzymano bota')
+  }catch(e){ toast('❌ ' + e.message) }
+}
+
+async function xpostSetLimit(v){
+  const slug = _xAcct().slug
+  const n = Math.max(1, Math.min(8, parseInt(v)||5))
+  try{
+    await setDoc(doc(db,'xpostControl',slug), { dailyMax: n, updatedAt: new Date().toISOString() }, { merge:true })
+    xpostControl = { ...xpostControl, dailyMax: n }
+    toast('Limit ustawiony: ' + n + '/dzień')
+  }catch(e){ toast('❌ ' + e.message) }
 }
 
 // ── ARCHIWUM PROJEKTÓW ───────────────────────────────────────────
@@ -7879,6 +8056,7 @@ Object.assign(window, {
   renderManualDrafts, updateManualDraftsBadge, startDraftEdit, cancelDraftEdit, saveDraftEdit, sendDraftToWpisy, deleteDraft, toggleDraftPreview,
   renderAiTools, toggleAitForm, openAitEdit, saveAiTool, deleteAiTool,
   renderStats,
+  renderXpostStats, loadXpostState, xpostToggleStop, xpostSetLimit, xpostSwitchAcct,
   filterByStatus,
   renderAirdrop, toggleAtView, toggleAtForm, openAtEdit, saveAt, deleteAt, setAtStatus, setAtField, importAtXlsx,
   exportAtCsv, duplicateAt, atSetSort,
