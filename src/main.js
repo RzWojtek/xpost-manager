@@ -1,14 +1,18 @@
 // ============================================================
 // XPost Manager — main.js
-// Wersja:          v2.51
-// Data:            2026-09-11
-// Zmiany:          Auto-wykrywanie projektów (bez listy ręcznej): projekt = @handle
+// Wersja:          v2.52
+// Data:            2026-09-29
+// Zmiany:          Linki ref: wyszukiwarka (nazwa/link/notatka) + filtry Wszystkie /
+//                  Do podmiany / Z notatką + układ listy (wiersze zamiast kafelków).
+//                  Zmienione TYLKO: renderRef (część widoku), znacznik page-ref, CSS .ref-*.
+//                  Dane refLinks, addRef/saveRefEdit/deleteRef, refLinksHtml — bez zmian.
+// Poprzednia:      v2.51 — Auto-wykrywanie projektów (bez listy ręcznej): projekt = @handle
 //                  wspomniany przez >=3 różne konta; wpis pasuje po @ lub całym
 //                  słowie (nazwy pospolite tylko z @). Chip "Nazwa N" na karcie
 //                  (klik = filtr), dropdown "Projekty" w pasku filtrów, licznik z
 //                  postów poza Odrzucone/Opublikowane/Historyczne. Frontend-only, 0 zapytań.
-// Poprzednia:      v2.50 (avatar + metryki z X)
-// Git tag:         v2.51
+//                  (poprzednio v2.50: avatar + metryki z X)
+// Git tag:         v2.52
 // ============================================================
 import './style.css'
 import { db, auth, googleProvider } from './firebase.js'
@@ -865,6 +869,8 @@ async function triggerAIPara(postId, btn, promptKey = 'para') {
 let posts      = {}
 let myPosts    = {}
 let refLinks   = {}
+let refQuery   = ''      // v2.52 — wyszukiwarka Linków ref (tylko widok, bez zapisu)
+let refFilter  = 'all'   // v2.52 — 'all' | 'auto' | 'note'
 let notes      = {}
 let tgSignals  = {}
 let tgWpisy    = {}
@@ -3948,11 +3954,39 @@ function renderRef() {
   })
   const el = document.getElementById('ref-cards')
   if(!el) return
-  if(!list.length){el.innerHTML='<div class="empty">Brak linków referencyjnych.</div>';return}
-  el.innerHTML = list.map(r=>{
+  // v2.52 — wyszukiwarka + filtry (Wszystkie / Do podmiany / Z notatką). Tylko widok —
+  // obiekt refLinks i dane w Firebase NIE są zmieniane.
+  const all = list
+  const cntAuto = all.filter(r=>r.autoImported).length
+  const cntNote = all.filter(r=>r.note).length
+  const q = refQuery.trim().toLowerCase()
+  const shown = all.filter(r=>{
+    if (refFilter==='auto' && !r.autoImported) return false
+    if (refFilter==='note' && !r.note) return false
+    if (r._editing) return true                       // edytowany wiersz nie znika w trakcie edycji
+    if (!q) return true
+    return ((r.name||'')+' '+(r.url||'')+' '+(r.note||'')).toLowerCase().includes(q)
+  })
+  const chipsEl = document.getElementById('ref-chips')
+  if (chipsEl) {
+    const chips = [['all','Wszystkie',all.length],['auto','⚠ Do podmiany',cntAuto],['note','📝 Z notatką',cntNote]]
+    chipsEl.innerHTML = chips.map(([id,label,n]) =>
+      `<button class="ref-chip-f${refFilter===id?' active':''}" onclick="setRefFilter('${id}')">${label} (${n})</button>`).join('')
+  }
+  const cntEl = document.getElementById('ref-count')
+  if (cntEl) cntEl.textContent = (q || refFilter!=='all') ? `${shown.length} z ${all.length}` : `${all.length}`
+  const clr = document.getElementById('ref-search-clear')
+  if (clr) clr.style.display = refQuery ? '' : 'none'
+  if(!all.length){el.innerHTML='<div class="empty">Brak linków referencyjnych.</div>';return}
+  if(!shown.length){
+    const qs = refQuery.replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    el.innerHTML = `<div class="empty">Brak linków pasujących${q?` do „${qs}”`:''}.</div>`
+    return
+  }
+  el.innerHTML = `<div class="ref-head"><span>Projekt</span><span>Link</span><span>Notatka</span><span></span></div>` + shown.map(r=>{
     const editing=!!r._editing
     const auto=!!r.autoImported
-    return `<div class="ref-card${editing?' editing':''}" id="refcard-${r.id}" style="${auto&&!editing?'border:1px solid #f59e0b;background:rgba(245,158,11,.06)':''}">
+    return `<div class="ref-card${editing?' editing':''}${auto&&!editing?' ref-auto':''}" id="refcard-${r.id}">
       ${editing ? `
         <div class="edit-form">
           <div><div class="form-label">Nazwa projektu</div>
@@ -3967,9 +4001,9 @@ function renderRef() {
           </div>
         </div>
       ` : `
-        <div class="ref-project">${r.name} ${auto?'<span style="font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(245,158,11,.18);color:#f59e0b;border:1px solid rgba(245,158,11,.4);font-weight:700">⚠ Podmień ref</span>':''}</div>
-        <div class="ref-link-url">${r.url}</div>
-        ${r.note ? `<div style="font-size:12px;color:var(--text3);margin:4px 0 6px;padding:4px 8px;background:var(--bg3);border-radius:var(--r)">📝 ${r.note}</div>` : ''}
+        <div class="ref-project">${r.name} ${auto?'<span style="font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(245,158,11,.18);color:#f59e0b;border:1px solid rgba(245,158,11,.4);font-weight:700;white-space:nowrap">⚠ Podmień ref</span>':''}</div>
+        <div class="ref-link-url" title="${String(r.url).replace(/"/g,'&quot;')}">${r.url}</div>
+        <div class="ref-note">${r.note ? `📝 ${r.note}` : '<span style="opacity:.5">—</span>'}</div>
         <div class="ref-actions">
           <button class="btn btn-info" onclick="copyText('${r.url.replace(/'/g,"\\'")}')">Kopiuj link</button>
           <button class="btn" onclick="startRefEdit('${r.id}')">Edytuj</button>
@@ -3979,6 +4013,16 @@ function renderRef() {
     </div>`
   }).join('')
 }
+
+// v2.52 — stan wyszukiwarki Linków ref: zmienne refQuery/refFilter zadeklarowane przy refLinks (góra pliku)
+function setRefQuery(v) { refQuery = String(v||''); renderRef() }
+function clearRefQuery() {
+  refQuery = ''
+  const inp = document.getElementById('ref-search')
+  if (inp) { inp.value = ''; inp.focus() }
+  renderRef()
+}
+function setRefFilter(f) { refFilter = (f==='auto'||f==='note') ? f : 'all'; renderRef() }
 
 function toggleRefForm(show) {
   const f=document.getElementById('ref-form')
@@ -7652,6 +7696,17 @@ function buildApp() {
           </div>
         </div>
       </div>
+      <div class="ref-toolbar">
+        <div class="ref-search">
+          <span class="ref-search-ico">🔍</span>
+          <input id="ref-search" type="search" autocomplete="off" placeholder="Szukaj po nazwie, domenie lub notatce…" oninput="setRefQuery(this.value)">
+          <button id="ref-search-clear" class="btn" style="display:none" onclick="clearRefQuery()">Wyczyść</button>
+        </div>
+        <div class="ref-toolbar-row">
+          <div id="ref-chips" class="ref-chips"></div>
+          <span id="ref-count" class="ref-count"></span>
+        </div>
+      </div>
       <div id="ref-cards"></div>
     </div>
 
@@ -8044,6 +8099,7 @@ Object.assign(window, {
   renderArchive, restorePost, toggleArchExpand,
   addNote, deleteNote, startNoteEdit, cancelNoteEdit, saveNoteEdit, copyNoteText,
   renderRef, toggleRefForm, addRef, startRefEdit, cancelRefEdit, saveRefEdit, deleteRef,
+  setRefQuery, clearRefQuery, setRefFilter,
   toggleEmojiPanel, addEmoji, emojiClick, removeEmoji,
   copyRefToParaphrase, copyRefFromSelect,
   renderKalendarz, toggleDayPosts, showDayPosts, toggleKPost,
